@@ -46,7 +46,8 @@ class DatasetSpliter:
                 per_class_list[n] = per_class_list[n][min(len(per_class_list[n]), no_imgs):]
         return per_client_list 
         
-    def dirichlet_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32, alpha: int = 1) -> dict[DataLoader]:
+    # def dirichlet_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32, alpha: int = 1) -> dict[DataLoader]:
+    def dirichlet_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32, alpha: int = 1) -> dict:
         #get each client samples
         split_list = self._sample_dirichlet(dataset = dataset, 
                                             client_list = client_list,
@@ -64,7 +65,8 @@ class DatasetSpliter:
         
         return dataloaders
     
-    def random_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32) -> dict[DataLoader]:
+    # def random_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32) -> dict[DataLoader]:
+    def random_split(self, dataset: Dataset, client_list: dict, batch_size: int = 32) -> dict:
         #Here we use a large alpha to simulate the average sampling.
         return self.dirichlet_split(dataset, client_list, batch_size, 1000000)
     

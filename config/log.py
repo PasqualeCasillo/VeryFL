@@ -22,6 +22,5 @@ def get_file_name():
 
 def set_log_config():
     logging.basicConfig(filename = get_file_name(), 
-                        encoding = encoding, 
-                        level = level,
-                        format = format)
+                    level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

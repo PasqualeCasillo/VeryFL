@@ -46,7 +46,7 @@ class FashionMNIST(BenchMark):
         }
         self.train_args = {
             'optimizer': 'SGD',
-            'device': 'cuda',
+            'device': 'cpu',
             'lr': 1e-2,
             'weight_decay': 1e-5,  
             'num_steps': 1,

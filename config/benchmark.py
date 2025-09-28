@@ -105,6 +105,33 @@ class Sign(BenchMark):
         self.algorithm = FedIPR()
         
         
+# config/benchmark.py (aggiunta alla classe esistente)
+
+class DecentralizedFashionMNIST(BenchMark):
+    def __init__(self):
+        super(DecentralizedFashionMNIST, self).__init__('DecentralizedFashionMNIST')
+        self.global_args = {
+            'client_num': 5,
+            'model': 'simpleCNN',
+            'dataset': 'FashionMNIST',
+            'batch_size': 32,
+            'class_num': 10,
+            'data_folder': './data',
+            'communication_round': 10,
+            'non-iid': False,
+            'alpha': 1,
+            'mode': 'decentralized',
+            'auction_timeout': 180,
+        }
+        self.train_args = {
+            'optimizer': 'SGD',
+            'device': 'cpu',
+            'lr': 1e-2,
+            'weight_decay': 1e-5,  
+            'num_steps': 1,
+        }
+        self.algorithm = FedAvg()
+
 def get_benchmark(args: str) -> BenchMark:
     if(args == "FashionMNIST"):
         return FashionMNIST()
@@ -112,7 +139,21 @@ def get_benchmark(args: str) -> BenchMark:
         return CIFAR10()
     elif(args == "Sign"):
         return Sign()
+    elif(args == "DecentralizedFashionMNIST"):
+        return DecentralizedFashionMNIST()
     else:
         logger.error(f"Unknown Benchmark {args}")
-        raise Exception(f"Unknown Benchmark {args}") 
+        raise Exception(f"Unknown Benchmark {args}")
+    
+        
+# def get_benchmark(args: str) -> BenchMark:
+#     if(args == "FashionMNIST"):
+#         return FashionMNIST()
+#     elif (args == "CIFAR10"):
+#         return CIFAR10()
+#     elif(args == "Sign"):
+#         return Sign()
+#     else:
+#         logger.error(f"Unknown Benchmark {args}")
+#         raise Exception(f"Unknown Benchmark {args}") 
     

@@ -105,13 +105,56 @@ class Task:
         self._construct_dataloader()
         self._construct_sign()
         self._construct_client()
-        
+
         for i in range(self.global_args['communication_round']):
+            logger.info(f"Starting FL round {i+1}/{self.global_args['communication_round']}")
+
+            # Client training phase
             for client in self.client_pool:
                 client.train(epoch = i)
                 client.test(epoch = i)
                 client.sign_test(epoch = i)
+
+            # NEW: Upload models to IPFS before aggregation
+            logger.info("Uploading client models to IPFS...")
+            for idx, client in enumerate(self.client_pool):
+                upload_params = {
+                    'epoch': i,
+                    'state_dict': client.get_model_state_dict(),
+                    'client_id': client.client_id,
+                    'timestamp': None
+                }
+
+                # Upload via chain proxy (IPFS + Blockchain)
+                result = chain_proxy.upload_model(upload_params)
+                logger.info(f"Client {client.client_id} upload result: {result}")
+
+            # Server aggregation
+            logger.info("Starting model aggregation...")
             self.server.receive_upload(self.client_pool)
             global_model = self.server.aggregate()
+
+            # NEW: Upload global model to IPFS
+            logger.info("Uploading global model to IPFS...")
+            global_upload_params = {
+                'epoch': i,
+                'state_dict': global_model,
+                'client_id': 'global_server',
+                'timestamp': None
+            }
+
+            global_result = chain_proxy.upload_model(global_upload_params)
+            logger.info(f"Global model upload result: {global_result}")
+
+            # Distribute global model to clients
+            logger.info("Distributing global model to clients...")
             for client in self.client_pool:
-                client.load_state_dict(global_model)
+                # Try to download from IPFS first
+                downloaded_model = chain_proxy.download_model()
+                if downloaded_model and 'state_dict' in downloaded_model:
+                    client.load_state_dict(downloaded_model['state_dict'])
+                    logger.info(f"Client {client.client_id} received model from IPFS")
+                else:
+                    # Fallback to direct assignment
+                    client.load_state_dict(global_model)
+                    logger.info(f"Client {client.client_id} received model via fallback")

@@ -1,5 +1,5 @@
 """
-Updated interact.py with IPFS integration - Fixed imports
+Updated interact.py with IPFS
 """
 from util import jsonFormat
 from collections import defaultdict
@@ -176,7 +176,7 @@ class chainProxy():
                 # Try to register on blockchain
                 if self.model_registry:
                     try:
-                        logger.info("Registering model on blockchain...")
+                        # logger.info("Registering model on blockchain...")
                         tx = self.model_registry.registerModel(
                             self.current_epoch,
                             ipfs_hash,
@@ -270,7 +270,7 @@ class chainProxy():
             # Try IPFS first
             model_data = self.download_model_from_ipfs()
             if model_data:
-                logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
+                # logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
                 return model_data
         except Exception as e:
             logger.warning(f"IPFS download failed: {e}")

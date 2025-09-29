@@ -96,9 +96,37 @@ class Task:
         return
     
     def _regist_client(self):
+        """Registra client sulla blockchain"""
+        # logger.info("=" * 60)
+        # logger.info("CLIENT REGISTRATION PHASE")
+        # logger.info("=" * 60)
+
         for i in range(self.global_args['client_num']):
-            chain_proxy.client_regist()
+            client_id = chain_proxy.client_regist()
+
+            # Verifica registrazione
+            verification = chain_proxy.verify_client_registration(client_id)
+            if verification['registered']:
+                logger.info(f"Client {client_id} verified on blockchain (ID: {verification['blockchain_id']})")
+            else:
+                logger.warning(f"Client {client_id} verification failed: {verification['reason']}")
+
         self.client_list = chain_proxy.get_client_list()
+
+        # Riepilogo finale
+        # logger.info("=" * 60)
+        # logger.info("REGISTRATION SUMMARY")
+        # logger.info("=" * 60)
+
+        registered = chain_proxy.get_all_registered_clients()
+        logger.info(f"Total clients registered on blockchain: {len(registered)}")
+
+        # for client in registered:
+        #     logger.info(f"  Client {client['local_id']}: "
+        #                f"Blockchain ID={client['blockchain_id']}, "
+        #                f"Address={client['address'][:10]}...")
+
+        # logger.info("=" * 60)
     
     def _construct_client(self):
         for client_id, _ in self.client_list.items():

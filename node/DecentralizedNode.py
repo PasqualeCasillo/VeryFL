@@ -151,12 +151,11 @@ class DecentralizedNode:
         }
         
     def get_auction_offer(self, base_cost: int = 100) -> Dict[str, int]:
-        # Varia le offerte tra nodi e round
         noise_factor = random.uniform(0.8, 1.2)
         return {
             'computePower': int(self.compute_power * noise_factor),
             'bandwidth': int(self.bandwidth * noise_factor),
             'reliability': self.reliability,
             'dataSize': self.data_size,
-            'cost': int(base_cost * random.uniform(0.7, 1.3))  # Varia costo
+            'cost': max(1, int(base_cost * random.uniform(0.7, 1.3)))  # Garantisce cost >= 1
         }

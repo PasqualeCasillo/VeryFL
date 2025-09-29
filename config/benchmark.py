@@ -122,13 +122,14 @@ class DecentralizedFashionMNIST(BenchMark):
             'alpha': 1,
             'mode': 'decentralized',
             'auction_timeout': 180,
+            'aggregation_method': 'fedavg'  # Opzioni: 'fedavg', 'krum', 'median'
         }
         self.train_args = {
-            'optimizer': 'SGD',
+            'optimizer': 'Adam', # SGD
             'device': 'cpu',
-            'lr': 1e-2,
-            'weight_decay': 1e-5,  
-            'num_steps': 1,
+            'lr': 5e-3,  # Ridotto da 0.01
+            'weight_decay': 1e-4,  # Aumentato da 1e-5
+            'num_steps': 2,  # Aumentato da 1
         }
         self.algorithm = FedAvg()
 

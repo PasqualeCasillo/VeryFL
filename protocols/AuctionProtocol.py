@@ -6,13 +6,26 @@ from typing import List, Dict, Any, Optional
 from networkx import nodes
 from node.DecentralizedNode import DecentralizedNode
 
+from server.aggregation_alg.krum import krumAggregator
+from server.aggregation_alg.median import medianAggregator
+
 logger = logging.getLogger(__name__)
 
 class AuctionProtocol:
-    def __init__(self, blockchain_proxy, timeout_seconds: int = 300):
+    def __init__(self, blockchain_proxy, timeout_seconds: int = 300, 
+                 aggregation_method: str = 'fedavg'):
         self.blockchain = blockchain_proxy
         self.timeout_seconds = timeout_seconds
         self.current_auction_address = None
+        self.aggregation_method = aggregation_method
+        
+        # Inizializza aggregatore
+        if aggregation_method == 'krum':
+            self.aggregator = krumAggregator()
+        elif aggregation_method == 'median':
+            self.aggregator = medianAggregator()
+        else:
+            self.aggregator = None  # FedAvg default
         
     async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[dict]:
         """Execute a complete auction-based FL round"""
@@ -140,23 +153,22 @@ class AuctionProtocol:
             return False
             
     async def _wait_for_election(self, auction_address: str) -> Optional[str]:
-        """Wait for auction to close and return elected aggregator"""
         max_wait_time = self.timeout_seconds + 60
         check_interval = 10
+        checks = max_wait_time // check_interval
         
-        for _ in range(max_wait_time // check_interval):
+        for attempt in range(checks):
             try:
                 election_result = self.blockchain.get_election_result(auction_address)
                 if election_result:
                     return election_result
-                    
-                await asyncio.sleep(check_interval)
-                
             except Exception as e:
-                logger.error(f"Error checking election result: {e}")
+                logger.warning(f"Election check attempt {attempt+1}/{checks} failed: {e}")
+            
+            if attempt < checks - 1:  # Non aspettare dopo l'ultimo tentativo
                 await asyncio.sleep(check_interval)
-                
-        logger.error("Timeout waiting for election result")
+        
+        logger.error(f"Election timeout after {max_wait_time}s")
         return None
         
     async def _execute_fl_round(self, nodes: List[DecentralizedNode], 
@@ -225,63 +237,84 @@ class AuctionProtocol:
         except Exception as e:
             logger.error(f"Error training node {node.node_id}: {e}")
             return {'error': str(e), 'node_id': node.node_id}
+        
+        
+    async def _upload_node_model(self, node: DecentralizedNode) -> str:
+        """Upload singolo modello"""
+        upload_params = {
+            'epoch': node.current_round,
+            'state_dict': node.get_model_state_dict(),
+            'client_id': node.node_id,
+            'timestamp': None
+        }
+        result = self.blockchain.upload_model(upload_params)
+        logger.info(f"Node {node.node_id} model upload result: {result}")
+        return result
             
     async def _upload_models(self, nodes: List[DecentralizedNode]) -> bool:
-        """Upload all node models to IPFS"""
         try:
-            for node in nodes:
-                upload_params = {
-                    'epoch': node.current_round,
-                    'state_dict': node.get_model_state_dict(),
-                    'client_id': node.node_id,
-                    'timestamp': None
-                }
-                
-                result = self.blockchain.upload_model(upload_params)
-                logger.info(f"Node {node.node_id} model upload result: {result}")
-                
-            return True
+            upload_tasks = [self._upload_node_model(node) for node in nodes]
+            results = await asyncio.gather(*upload_tasks, return_exceptions=True)
+
+            successful = sum(1 for r in results if not isinstance(r, Exception))
+            logger.info(f"Uploaded {successful}/{len(nodes)} models successfully")
+            return successful > 0
         except Exception as e:
             logger.error(f"Error uploading models: {e}")
             return False
+    
             
+    # protocols/AuctionProtocol.py - metodo _perform_aggregation
     async def _perform_aggregation(self, nodes: List[DecentralizedNode], 
-                                 aggregator_address: str) -> Optional[Dict]:
-        """Perform model aggregation"""
-        try:
-            import brownie
-            
-            # Find aggregator node by real address
-            aggregator_node = None
-            for node in nodes:
-                node_index = int(node.node_id)
-                real_address = brownie.accounts[node_index].address
-                if real_address.lower() == aggregator_address.lower():
-                    aggregator_node = node
-                    break
+                                     aggregator_address: str) -> Optional[Dict]:
+            try:
+                import brownie
+                
+                aggregator_node = None
+                for node in nodes:
+                    node_index = int(node.node_id)
+                    real_address = brownie.accounts[node_index].address
+                    if real_address.lower() == aggregator_address.lower():
+                        aggregator_node = node
+                        break
+                        
+                if not aggregator_node:
+                    logger.error("Aggregator node not found")
+                    return None
                     
-            if not aggregator_node:
-                logger.error("Aggregator node not found")
+                model_states = [node.get_model_state_dict() for node in nodes]
+                
+                # Verifica compatibilità
+                first_keys = set(model_states[0].keys())
+                for i, state in enumerate(model_states[1:], 1):
+                    if set(state.keys()) != first_keys:
+                        logger.error(f"Node {i} model keys mismatch")
+                        return None
+                    for key in first_keys:
+                        if model_states[0][key].shape != state[key].shape:
+                            logger.error(f"Node {i} tensor shape mismatch for {key}")
+                            return None
+                
+                # Scegli metodo aggregazione
+                if self.aggregator:
+                    logger.info(f"Using {self.aggregation_method} aggregation")
+                    aggregated_state = self.aggregator._aggregate_alg(model_states)
+                else:
+                    # FedAvg default
+                    logger.info("Using FedAvg aggregation")
+                    aggregated_state = {}
+                    num_models = len(model_states)
+                    for key in model_states[0].keys():
+                        aggregated_state[key] = sum(state[key] for state in model_states) / num_models
+                        
+                logger.info(f"Aggregation completed by node {aggregator_node.node_id}")
+                return aggregated_state
+                
+            except Exception as e:
+                logger.error(f"Error in aggregation: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None
-                
-            # Collect all model state dicts
-            model_states = [node.get_model_state_dict() for node in nodes]
-            
-            # Simple FedAvg aggregation
-            aggregated_state = {}
-            num_models = len(model_states)
-            
-            for key in model_states[0].keys():
-                aggregated_state[key] = sum(state[key] for state in model_states) / num_models
-                
-            logger.info(f"Aggregation completed by node {aggregator_node.node_id}")
-            return aggregated_state
-            
-        except Exception as e:
-            logger.error(f"Error in aggregation: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return None
             
     async def _distribute_global_model(self, nodes: List[DecentralizedNode], 
                                      global_model: Dict) -> bool:

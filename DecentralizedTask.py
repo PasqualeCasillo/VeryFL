@@ -16,9 +16,13 @@ class DecentralizedTask(Task):
     def __init__(self, global_args, train_args, algorithm):
         super().__init__(global_args, train_args, algorithm)
         self.nodes = []
+        
+        aggregation_method = global_args.get('aggregation_method', 'fedavg')
+        
         self.auction_protocol = AuctionProtocol(
             blockchain_proxy=auction_chain_proxy,
-            timeout_seconds=global_args.get('auction_timeout', 300)
+            timeout_seconds=global_args.get('auction_timeout', 300),
+            aggregation_method=aggregation_method
         )
         self.metrics_calculator = MetricsCalculator()
         self.metrics_logger = MetricsLogger(save_dir=global_args.get('results_dir', 'results'))

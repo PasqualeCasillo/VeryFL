@@ -76,6 +76,8 @@ class DecentralizedNode:
         # Metriche post-training
         final_loss, final_acc = self._evaluate_model()
         
+        self._last_training_loss = final_loss
+        
         logger.info(f"Node {self.node_id} training results: "
                    f"initial_loss={initial_loss:.4f}, "
                    f"final_loss={final_loss:.4f}, "

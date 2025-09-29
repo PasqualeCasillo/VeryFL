@@ -2,6 +2,8 @@
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional
+
+from networkx import nodes
 from node.DecentralizedNode import DecentralizedNode
 
 logger = logging.getLogger(__name__)
@@ -12,7 +14,7 @@ class AuctionProtocol:
         self.timeout_seconds = timeout_seconds
         self.current_auction_address = None
         
-    async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[str]:
+    async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[dict]:
         """Execute a complete auction-based FL round"""
         try:
             logger.info(f"Starting auction protocol for round {round_num}")
@@ -37,7 +39,20 @@ class AuctionProtocol:
             logger.info(f"Aggregator elected for round {round_num}: {elected_aggregator}")
             
             # Phase 4: Execute FL round with elected aggregator
-            return await self._execute_fl_round(nodes, elected_aggregator, round_num)
+            fl_result = await self._execute_fl_round(nodes, elected_aggregator, round_num)
+            
+            if not fl_result:
+                return None
+            
+            # Phase 5: Calculate aggregate loss
+            aggregate_loss = self._calculate_aggregate_loss(nodes)
+            
+            return {
+                'success': True,
+                'round': round_num,
+                'aggregator': elected_aggregator,
+                'aggregate_loss': aggregate_loss
+            }
             
         except Exception as e:
             logger.error(f"Error in auction protocol round {round_num}: {e}")
@@ -280,3 +295,15 @@ class AuctionProtocol:
         except Exception as e:
             logger.error(f"Error distributing global model: {e}")
             return False
+        
+    def _calculate_aggregate_loss(self, nodes):
+        """Calculate average loss from all nodes' training results"""
+        total_loss = 0.0
+        count = 0
+
+        for node in nodes:
+            if hasattr(node, '_last_training_loss') and node._last_training_loss is not None:
+                total_loss += node._last_training_loss
+                count += 1
+
+        return total_loss / count if count > 0 else 0.0

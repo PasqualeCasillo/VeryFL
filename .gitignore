@@ -11,3 +11,5 @@ veryfl_env/
 TODO
 go-ipfs_v0.12.0_linux-amd64.tar.gz
 go-ipfs/
+utils/
+results/

@@ -229,7 +229,7 @@ class chainProxy():
                 model_state_dict = self.ipfs_client.download_model(ipfs_hash)
                 
                 if model_state_dict:
-                    logger.info(f"Model downloaded from IPFS: {ipfs_hash}")
+                    # logger.info(f"Model downloaded from IPFS: {ipfs_hash}")
                     return {
                         'state_dict': model_state_dict,
                         'ipfs_hash': ipfs_hash,

@@ -4,7 +4,6 @@ from chainfl.interact import chainProxy
 
 logger = logging.getLogger(__name__)
 
-# Import brownie globally like interact.py does
 try:
     import brownie
     from brownie import network
@@ -15,6 +14,40 @@ except ImportError:
     BROWNIE_AVAILABLE = False
     logger.info("Brownie not available in auction_proxy")
 
+
+class AuctionContract:
+    """Wrapper uniforme per contratti reali e mock"""
+    
+    def __init__(self, contract, is_real=True):
+        self.contract = contract
+        self.is_real = is_real
+    
+    @property
+    def address(self):
+        if self.is_real:
+            return self.contract.address
+        else:
+            return self.contract['address']
+    
+    def submit_offer(self, *args, **kwargs):
+        if self.is_real:
+            return self.contract.submitOffer(*args, **kwargs)
+        else:
+            return None
+    
+    def get_aggregator(self):
+        if self.is_real:
+            return self.contract.aggregator()
+        else:
+            return self.contract.get('aggregator')
+    
+    def get_state(self):
+        if self.is_real:
+            return self.contract.auctionState()
+        else:
+            return self.contract.get('state')
+
+
 class AuctionChainProxy(chainProxy):
     def __init__(self):
         super().__init__()
@@ -24,10 +57,8 @@ class AuctionChainProxy(chainProxy):
         """Deploy new auction contract for a round"""
         try:
             if BROWNIE_AVAILABLE and brownie:
-                # Deploy actual smart contract
                 logger.info(f"Deploying REAL auction contract for round {round_number}")
                 
-                # Access contracts from brownie project
                 contracts = brownie.project.chainServer
                 auction_contract = contracts.AggregatorAuction.deploy(
                     whitelist,
@@ -36,20 +67,22 @@ class AuctionChainProxy(chainProxy):
                     {'from': brownie.accounts[0]}
                 )
                 
-                contract_address = auction_contract.address
-                self.auction_contracts[round_number] = auction_contract
+                wrapped_contract = AuctionContract(auction_contract, is_real=True)
+                self.auction_contracts[round_number] = wrapped_contract
                 
-                logger.info(f"Real auction deployed at {contract_address}")
-                return contract_address
+                logger.info(f"Real auction deployed at {wrapped_contract.address}")
+                return wrapped_contract.address
             else:
-                # Mock deployment for testing
                 contract_address = f"0xauction{round_number:04d}"
-                self.auction_contracts[round_number] = {
+                mock_contract = {
                     'address': contract_address,
                     'state': 'CollectingOffers',
                     'offers': {},
                     'aggregator': None
                 }
+                
+                wrapped_contract = AuctionContract(mock_contract, is_real=False)
+                self.auction_contracts[round_number] = wrapped_contract
                 
                 logger.info(f"Mock deployed auction contract at {contract_address}")
                 return contract_address
@@ -59,41 +92,38 @@ class AuctionChainProxy(chainProxy):
             import traceback
             logger.error(traceback.format_exc())
             return None
+    
+    def _find_contract_by_address(self, auction_address):
+        """Find contract wrapper by address"""
+        for round_num, wrapped_contract in self.auction_contracts.items():
+            if wrapped_contract.address == auction_address:
+                return wrapped_contract
+        return None
             
     def submit_offer(self, auction_address, node_address, computePower, 
                     bandwidth, reliability, dataSize, cost):
         """Submit offer to auction contract"""
         try:
-            # Find contract by address
-            contract = None
-            round_num = None
-            for rn, stored_contract in self.auction_contracts.items():
-                if (hasattr(stored_contract, 'address') and stored_contract.address == auction_address) or \
-                   (isinstance(stored_contract, dict) and stored_contract['address'] == auction_address):
-                    contract = stored_contract
-                    round_num = rn
-                    break
-                    
-            if not contract:
+            wrapped_contract = self._find_contract_by_address(auction_address)
+            
+            if not wrapped_contract:
                 logger.error(f"Auction contract not found: {auction_address}")
                 return False
-                
-            if hasattr(contract, 'submitOffer'):
-                # Real blockchain call
+            
+            if wrapped_contract.is_real:
                 logger.info(f"Submitting REAL offer from {node_address}")
                 
-                tx = contract.submitOffer(
+                tx = wrapped_contract.submit_offer(
                     computePower, bandwidth, reliability, dataSize, cost,
                     {'from': node_address}
                 )
                 logger.info(f"Real offer submitted, tx: {tx.txid}")
                 return True
             else:
-                # Mock submission
                 import random
                 varied_cost = cost + random.randint(-20, 20)
                 
-                contract['offers'][node_address] = {
+                wrapped_contract.contract['offers'][node_address] = {
                     'computePower': computePower,
                     'bandwidth': bandwidth,
                     'reliability': reliability,
@@ -101,12 +131,11 @@ class AuctionChainProxy(chainProxy):
                     'cost': max(1, varied_cost)
                 }
                 
-                # Trigger election when all offers received
-                if len(contract['offers']) >= 5:
+                if len(wrapped_contract.contract['offers']) >= 5:
                     best_node = None
                     best_score = 0
                     
-                    for addr, offer in contract['offers'].items():
+                    for addr, offer in wrapped_contract.contract['offers'].items():
                         score = (
                             offer['computePower'] * 30 +
                             offer['bandwidth'] * 25 + 
@@ -118,9 +147,9 @@ class AuctionChainProxy(chainProxy):
                         if score > best_score:
                             best_score = score
                             best_node = addr
-                            
-                    contract['aggregator'] = best_node
-                    contract['state'] = 'Closed'
+                    
+                    wrapped_contract.contract['aggregator'] = best_node
+                    wrapped_contract.contract['state'] = 'Closed'
                     logger.info(f"Mock election: {best_node} won with score {best_score}")
                     
                 logger.info(f"Mock offer submitted for {node_address} with cost {varied_cost}")
@@ -135,28 +164,20 @@ class AuctionChainProxy(chainProxy):
     def get_election_result(self, auction_address):
         """Get election result from auction contract"""
         try:
-            # Find contract
-            contract = None
-            for round_num, stored_contract in self.auction_contracts.items():
-                if (hasattr(stored_contract, 'address') and stored_contract.address == auction_address) or \
-                   (isinstance(stored_contract, dict) and stored_contract['address'] == auction_address):
-                    contract = stored_contract
-                    break
-                    
-            if not contract:
+            wrapped_contract = self._find_contract_by_address(auction_address)
+            
+            if not wrapped_contract:
                 return None
-                
-            if hasattr(contract, 'aggregator'):
-                # Real blockchain call
+            
+            if wrapped_contract.is_real:
                 logger.info(f"Reading REAL election result")
-                aggregator = contract.aggregator()
+                aggregator = wrapped_contract.get_aggregator()
                 if aggregator != "0x0000000000000000000000000000000000000000":
                     logger.info(f"Real election result: {aggregator}")
                     return aggregator
             else:
-                # Mock contract
-                if contract['state'] == 'Closed' and contract['aggregator']:
-                    return contract['aggregator']
+                if wrapped_contract.contract['state'] == 'Closed' and wrapped_contract.contract['aggregator']:
+                    return wrapped_contract.contract['aggregator']
                     
             return None
             
@@ -164,5 +185,5 @@ class AuctionChainProxy(chainProxy):
             logger.error(f"Error getting election result: {e}")
             return None
 
-# Create global instance
+
 auction_chain_proxy = AuctionChainProxy()

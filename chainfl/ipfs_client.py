@@ -8,6 +8,10 @@ import logging
 import json
 from collections import OrderedDict
 import torch
+import warnings
+
+# Disabilita warning versione IPFS
+warnings.filterwarnings('ignore', message='Unsupported daemon version')
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +22,10 @@ class IPFSClient:
         :param ipfs_api: IPFS daemon API endpoint
         """
         try:
-            self.client = ipfshttpclient.connect(ipfs_api)
+            # Disabilita warning anche a livello di ipfshttpclient
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.client = ipfshttpclient.connect(ipfs_api)
             logger.info("Connected to IPFS daemon")
         except Exception as e:
             logger.error(f"Failed to connect to IPFS: {e}")

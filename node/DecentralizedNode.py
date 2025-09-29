@@ -2,6 +2,7 @@
 import logging
 from typing import Dict, Any
 from copy import deepcopy
+import random
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -21,11 +22,21 @@ class DecentralizedNode:
         self.role = "participant"
         self.current_round = 0
         
-        # Node capabilities for auction
+        # Verifica distribuzione corretta
+        labels = []
+        for _, label in self.dataloader:
+            labels.extend(label.tolist())
+        
+        from collections import Counter
+        class_dist = Counter(labels)
+        logger.info(f"Node {node_id} class distribution: {class_dist}")
+        logger.info(f"Node {node_id} dataset size: {len(labels)}")
+        
+        # Node capabilities
         self.compute_power = self._calculate_compute_power()
         self.bandwidth = self._calculate_bandwidth()
         self.reliability = self._calculate_reliability()
-        self.data_size = len(dataloader.dataset) if hasattr(dataloader, 'dataset') else 1000
+        self.data_size = len(labels)
         
     def _calculate_compute_power(self) -> int:
         """Calculate node's computational capacity"""
@@ -138,11 +149,12 @@ class DecentralizedNode:
         }
         
     def get_auction_offer(self, base_cost: int = 100) -> Dict[str, int]:
-        """Generate offer for auction"""
+        # Varia le offerte tra nodi e round
+        noise_factor = random.uniform(0.8, 1.2)
         return {
-            'computePower': self.compute_power,
-            'bandwidth': self.bandwidth,
+            'computePower': int(self.compute_power * noise_factor),
+            'bandwidth': int(self.bandwidth * noise_factor),
             'reliability': self.reliability,
             'dataSize': self.data_size,
-            'cost': base_cost
+            'cost': int(base_cost * random.uniform(0.7, 1.3))  # Varia costo
         }

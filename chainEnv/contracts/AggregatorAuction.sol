@@ -12,6 +12,8 @@ contract AggregatorAuction {
     uint256 public roundNumber;
     address[] public whitelist;
     
+    bool private electionCompleted; 
+    
     struct FLOffer {
         address node;
         uint256 computePower;
@@ -50,6 +52,7 @@ contract AggregatorAuction {
         deadline = block.timestamp + _timeoutSeconds;
         roundNumber = _roundNumber;
         auctionState = State.CollectingOffers;
+        electionCompleted = false;
     }
     
     function submitOffer(
@@ -88,6 +91,9 @@ contract AggregatorAuction {
     }
     
     function electAggregator() internal {
+        require(!electionCompleted, "Election already completed");  
+        electionCompleted = true; 
+        
         address bestNode;
         uint256 bestScore = 0;
         

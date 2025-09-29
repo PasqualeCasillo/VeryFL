@@ -46,8 +46,13 @@ class AuctionProtocol:
     async def _deploy_auction_contract(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[str]:
         """Deploy auction contract for the round"""
         try:
-            # Get node addresses (simplified - in practice would use actual blockchain addresses)
-            node_addresses = [f"0x{i:040d}" for i in range(len(nodes))]
+            # MODIFICA: Usa account Ganache reali invece di indirizzi mock
+            import brownie
+            
+            # Prendi i primi N account da Ganache (1-indexed perché 0 è il deployer)
+            node_addresses = [brownie.accounts[i+1].address for i in range(len(nodes))]
+            
+            logger.info(f"Using real Ganache addresses: {node_addresses}")
             
             # Deploy contract via blockchain proxy
             auction_address = self.blockchain.deploy_auction_contract(
@@ -62,6 +67,8 @@ class AuctionProtocol:
             
         except Exception as e:
             logger.error(f"Failed to deploy auction contract: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
             
     async def _collect_offers(self, nodes: List[DecentralizedNode], auction_address: str) -> bool:
@@ -91,11 +98,16 @@ class AuctionProtocol:
     async def _submit_node_offer(self, node: DecentralizedNode, auction_address: str) -> bool:
         """Submit offer for a single node"""
         try:
+            # MODIFICA: Usa account Ganache reale
+            import brownie
+            node_index = int(node.node_id)
+            real_address = brownie.accounts[node_index].address
+            
             offer = node.get_auction_offer()
             
             success = self.blockchain.submit_offer(
                 auction_address=auction_address,
-                node_address=f"0x{int(node.node_id):040d}",
+                node_address=real_address,  # Usa indirizzo reale
                 **offer
             )
             
@@ -108,12 +120,14 @@ class AuctionProtocol:
             
         except Exception as e:
             logger.error(f"Error submitting offer for node {node.node_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
             
     async def _wait_for_election(self, auction_address: str) -> Optional[str]:
         """Wait for auction to close and return elected aggregator"""
-        max_wait_time = self.timeout_seconds + 60  # Extra buffer
-        check_interval = 10  # seconds
+        max_wait_time = self.timeout_seconds + 60
+        check_interval = 10
         
         for _ in range(max_wait_time // check_interval):
             try:
@@ -133,9 +147,14 @@ class AuctionProtocol:
     async def _execute_fl_round(self, nodes: List[DecentralizedNode], 
                               elected_aggregator: str, round_num: int) -> str:
         """Execute FL training round with elected aggregator"""
-        # Set roles
+        # MODIFICA: Confronta con indirizzi reali Ganache
+        import brownie
+        
         for node in nodes:
-            if f"0x{int(node.node_id):040d}" == elected_aggregator:
+            node_index = int(node.node_id)
+            real_address = brownie.accounts[node_index].address
+            
+            if real_address.lower() == elected_aggregator.lower():
                 node.set_role("aggregator", round_num)
             else:
                 node.set_role("participant", round_num)
@@ -215,10 +234,14 @@ class AuctionProtocol:
                                  aggregator_address: str) -> Optional[Dict]:
         """Perform model aggregation"""
         try:
-            # Find aggregator node
+            import brownie
+            
+            # Find aggregator node by real address
             aggregator_node = None
             for node in nodes:
-                if f"0x{int(node.node_id):040d}" == aggregator_address:
+                node_index = int(node.node_id)
+                real_address = brownie.accounts[node_index].address
+                if real_address.lower() == aggregator_address.lower():
                     aggregator_node = node
                     break
                     
@@ -241,6 +264,8 @@ class AuctionProtocol:
             
         except Exception as e:
             logger.error(f"Error in aggregation: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
             
     async def _distribute_global_model(self, nodes: List[DecentralizedNode], 

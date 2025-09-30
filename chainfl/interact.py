@@ -1,5 +1,5 @@
 """
-Updated interact.py with IPFS integration - Fixed imports
+Updated interact.py with IPFS
 """
 from util import jsonFormat
 from collections import defaultdict
@@ -24,7 +24,7 @@ try:
     # Chain init
     p = brownie.project.load(project_path="chainEnv", name="chainServer")
     p.load_config()
-    
+       
     # Connect to network
     brownie.network.connect('development')
     
@@ -53,7 +53,7 @@ try:
         if hasattr(contracts, 'ModelRegistry'):
             model_registry_contract = contracts.ModelRegistry.deploy({'from': server_accounts})
         
-        logger.info("Smart contracts deployed successfully")
+        # logger.info("Smart contracts deployed successfully")
         
     except Exception as e:
         logger.warning(f"Some contracts failed to deploy: {e}")
@@ -124,17 +124,47 @@ class chainProxy():
         return f"0x{'1'*40}"
     
     def client_regist(self) -> str:
+        """Registra client sulla blockchain e localmente"""
         self.client_num += 1
-        
+
+        # Assicurati che esista un account per questo client
         if self.account_num < self.client_num:
             self.add_account()
-        
-        # Create client account reference
+
+        # Ottieni l'account del client
         if brownie and len(brownie.accounts) > self.client_num:
-            self.client_list[str(self.client_num)] = brownie.accounts[self.client_num]
+            client_account = brownie.accounts[self.client_num]
         else:
+            # Fallback senza blockchain
             self.client_list[str(self.client_num)] = f"client_{self.client_num}"
-        
+            logger.warning(f"Client {self.client_num} registered locally only (no blockchain)")
+            return str(self.client_num)
+
+        # NUOVO: Registra sulla blockchain
+        blockchain_id = None
+        if self.client_manager:
+            try:
+                logger.info(f"Registering client {self.client_num} on blockchain...")
+                tx = self.client_manager.register({'from': client_account})
+
+                # Il contratto ritorna l'ID assegnato
+                blockchain_id = self.client_manager.clientId(client_account.address)
+
+                # logger.info(f"Client {self.client_num} registered on blockchain")
+                # logger.info(f"Address: {client_account.address}")
+                # logger.info(f"Blockchain ID: {blockchain_id}")
+                # logger.info(f"Transaction: {tx.txid}")
+                # logger.info(f"Gas used: {tx.gas_used}")
+
+            except Exception as e:
+                logger.error(f"✗ Blockchain registration failed for client {self.client_num}: {e}")
+                logger.info("  Continuing with local registration only")
+        else:
+            logger.warning(f"clientManager contract not available, local registration only")
+
+        # Salva riferimento locale (per performance, evita query blockchain ogni volta)
+        self.client_list[str(self.client_num)] = client_account
+
         return str(self.client_num)
     
     def watermark_negotitaion(self, client_id: str, watermark_length=64):
@@ -176,7 +206,7 @@ class chainProxy():
                 # Try to register on blockchain
                 if self.model_registry:
                     try:
-                        logger.info("Registering model on blockchain...")
+                        # logger.info("Registering model on blockchain...")
                         tx = self.model_registry.registerModel(
                             self.current_epoch,
                             ipfs_hash,
@@ -229,7 +259,7 @@ class chainProxy():
                 model_state_dict = self.ipfs_client.download_model(ipfs_hash)
                 
                 if model_state_dict:
-                    logger.info(f"Model downloaded from IPFS: {ipfs_hash}")
+                    # logger.info(f"Model downloaded from IPFS: {ipfs_hash}")
                     return {
                         'state_dict': model_state_dict,
                         'ipfs_hash': ipfs_hash,
@@ -270,7 +300,7 @@ class chainProxy():
             # Try IPFS first
             model_data = self.download_model_from_ipfs()
             if model_data:
-                logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
+                # logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
                 return model_data
         except Exception as e:
             logger.warning(f"IPFS download failed: {e}")
@@ -328,6 +358,68 @@ class chainProxy():
                 watermark_args[layer_key]['M'] = M
 
         return watermark_args
+    
+    def verify_client_registration(self, client_id: str) -> dict:
+        """Verifica la registrazione di un client sulla blockchain"""
+        if not self.client_manager:
+            return {'registered': False, 'reason': 'Contract not available'}
+
+        try:
+            client_id_int = int(client_id)
+
+            # Ottieni l'account del client
+            if brownie and len(brownie.accounts) > client_id_int:
+                client_account = brownie.accounts[client_id_int]
+            else:
+                return {'registered': False, 'reason': 'Account not found'}
+
+            # Query blockchain
+            blockchain_id = self.client_manager.clientId(client_account.address)
+
+            if blockchain_id == 0:
+                return {
+                    'registered': False,
+                    'address': client_account.address,
+                    'reason': 'Not registered on blockchain'
+                }
+            else:
+                return {
+                    'registered': True,
+                    'address': client_account.address,
+                    'blockchain_id': blockchain_id,
+                    'reason': 'Verified on blockchain'
+                }
+
+        except Exception as e:
+            return {'registered': False, 'reason': f'Verification error: {e}'}
+
+    def get_all_registered_clients(self) -> list:
+        """Recupera tutti i client registrati dalla blockchain"""
+        if not self.client_manager:
+            return []
+        
+        try:
+            next_id = self.client_manager.nextId()
+            registered_clients = []
+            
+            # Controlla tutti gli account
+            for i in range(1, next_id):
+                if brownie and i < len(brownie.accounts):
+                    account = brownie.accounts[i]
+                    blockchain_id = self.client_manager.clientId(account.address)
+                    
+                    if blockchain_id > 0:
+                        registered_clients.append({
+                            'local_id': i,
+                            'blockchain_id': blockchain_id,
+                            'address': account.address
+                        })
+            
+            return registered_clients
+            
+        except Exception as e:
+            logger.error(f"Error retrieving registered clients: {e}")
+            return []
 
 # Create global instance
 chain_proxy = chainProxy()

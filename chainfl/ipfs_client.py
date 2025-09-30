@@ -56,7 +56,7 @@ class IPFSClient:
             result = self.client.add_bytes(model_bytes)
             ipfs_hash = result
             
-            logger.info(f"Model uploaded to IPFS: {ipfs_hash}")
+            # logger.info(f"Model uploaded to IPFS: {ipfs_hash}")
             return ipfs_hash
             
         except Exception as e:

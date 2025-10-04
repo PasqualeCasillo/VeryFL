@@ -90,12 +90,12 @@ class chainProxy():
         if IPFSClient:
             try:
                 self.ipfs_client = IPFSClient()
-                logger.info("IPFS client initialized successfully")
+                # logger.info("IPFS client initialized successfully")
                 
                 # Test IPFS connection
                 test_data = b"VeryFL test connection"
                 test_hash = self.ipfs_client.client.add_bytes(test_data)
-                logger.info(f"IPFS connection test successful: {test_hash}")
+                # logger.info(f"IPFS connection test successful: {test_hash}")
                 
             except Exception as e:
                 logger.warning(f"IPFS client failed to initialize: {e}")
@@ -145,7 +145,7 @@ class chainProxy():
         blockchain_id = None
         if self.client_manager:
             try:
-                logger.info(f"Registering client {self.client_num} on blockchain...")
+                # logger.info(f"Registering client {self.client_num} on blockchain...")
                 tx = self.client_manager.register({'from': client_account})
 
                 # Il contratto ritorna l'ID assegnato
@@ -159,7 +159,7 @@ class chainProxy():
 
             except Exception as e:
                 logger.error(f"✗ Blockchain registration failed for client {self.client_num}: {e}")
-                logger.info("  Continuing with local registration only")
+                # logger.info("Continuing with local registration only")
         else:
             logger.warning(f"clientManager contract not available, local registration only")
 
@@ -174,12 +174,12 @@ class chainProxy():
                 client_id = int(client_id)
                 if brownie and len(brownie.accounts) > client_id:
                     self.watermark_proxy.generate_watermark({'from': brownie.accounts[client_id]})
-                    logger.info(f"Watermark generated for client {client_id}")
+                    # logger.info(f"Watermark generated for client {client_id}")
                     return
             except Exception as e:
                 logger.warning(f"Blockchain watermark failed: {e}")
         
-        logger.info(f"Mock watermark generated for client {client_id}")
+        # logger.info(f"Mock watermark generated for client {client_id}")
     
     def upload_model_to_ipfs(self, upload_params: dict):
         """Upload model to IPFS and register hash on blockchain"""
@@ -198,7 +198,7 @@ class chainProxy():
         
         try:
             # Upload to IPFS
-            logger.info("Uploading model to IPFS network...")
+            # logger.info("Uploading model to IPFS network...")
             ipfs_hash = self.ipfs_client.upload_model(model_state_dict, metadata)
             
             if ipfs_hash:
@@ -207,7 +207,7 @@ class chainProxy():
                 # Try to register on blockchain
                 if self.model_registry:
                     try:
-                        # logger.info("Registering model on blockchain...")
+                        logger.info("Registering model on blockchain...")
                         tx = self.model_registry.registerModel(
                             self.current_epoch,
                             ipfs_hash,
@@ -221,7 +221,7 @@ class chainProxy():
                             {'from': self.server_accounts}
                         )
                         
-                        logger.info(f"Model registered on blockchain: Epoch {self.current_epoch}")
+                        # logger.info(f"Model registered on blockchain: Epoch {self.current_epoch}")
                         
                     except Exception as e:
                         logger.warning(f"Blockchain registration failed, IPFS only: {e}")
@@ -301,7 +301,7 @@ class chainProxy():
             # Try IPFS first
             model_data = self.download_model_from_ipfs()
             if model_data:
-                # logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
+                logger.info(f"Model downloaded from IPFS: {model_data.get('ipfs_hash', 'unknown')}")
                 return model_data
         except Exception as e:
             logger.warning(f"IPFS download failed: {e}")

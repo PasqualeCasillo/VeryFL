@@ -5,6 +5,7 @@ from .FashionMNIST import get_fashionmnist
 from .CIFAR10      import get_cifar10
 from .CIFAR100     import get_cifar100
 from .EMNIST       import get_emnist
+from .PowerGrid    import get_powergrid
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,12 @@ class DatasetFactory:
         return
     def get_dataset(self, dataset:str, train:bool = True)->Dataset:
         """
-        Now Support 4 Datasets:
+        Now Support 5 Datasets:
         1. FashionMNIST
         2. CIFAR10
         3. CIFAR100
         4. EMNIST
+        5. PowerGrid
         """
         if dataset == 'FashionMNIST':
             return get_fashionmnist(train = train)
@@ -32,6 +34,8 @@ class DatasetFactory:
             return get_cifar100(train = train)
         elif dataset == 'EMNIST':
             return get_emnist(train = train)
+        elif dataset == 'PowerGrid':
+            return get_powergrid(train = train)
         else:
             logger.error("DatasetFactory received an unknown dataset %s", dataset)
             raise Exception(f"Unrecognized Dataset: {dataset}")

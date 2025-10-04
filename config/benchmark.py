@@ -16,7 +16,8 @@ model = ["simpleCNN",
          "VGG_A",
          "VGG_B",
          "VGG_D",
-         "VGG_E",]
+         "VGG_E",
+         "PowerGridNet"]
 
 optimizer = ["SGD",
              "Adam"]
@@ -34,13 +35,13 @@ class FashionMNIST(BenchMark):
     def __init__(self):
         super(FashionMNIST,self).__init__('FashionMNIST')
         self.global_args = {
-            'client_num': 10,
+            'client_num': 5,
             'model': 'simpleCNN',
             'dataset': 'FashionMNIST',
             'batch_size': 32,
             'class_num': 10,
             'data_folder': './data',
-            'communication_round': 200,
+            'communication_round': 100,
             'non-iid': False,
             'alpha': 1,
         }
@@ -104,7 +105,30 @@ class Sign(BenchMark):
         }
         self.algorithm = FedIPR()
         
-        
+class PowerGrid(BenchMark):
+    def __init__(self):
+        super(PowerGrid,self).__init__('PowerGrid')
+        self.global_args = {
+            'client_num': 10,  # Ridotto a 10 per test
+            'model': 'PowerGridNet',
+            'dataset': 'PowerGrid',
+            'batch_size': 32,
+            'class_num': 2,
+            'data_folder': './data',
+            'communication_round': 100,  # Solo 100 round per test
+            'non-iid': True,
+            'alpha': 0.5,
+        }
+        self.train_args = {
+            'optimizer': 'SGD',  # SGD è più stabile di Adam per questo dataset
+            'device': 'cpu',
+            'lr': 0.01,  # Learning rate più alto con SGD
+            'weight_decay': 0.0001,  
+            'num_steps': 10,  # Più epoche locali
+        }
+        self.algorithm = FedAvg() 
+   
+     
 def get_benchmark(args: str) -> BenchMark:
     if(args == "FashionMNIST"):
         return FashionMNIST()
@@ -112,6 +136,8 @@ def get_benchmark(args: str) -> BenchMark:
         return CIFAR10()
     elif(args == "Sign"):
         return Sign()
+    elif(args == "PowerGrid"):
+        return PowerGrid()
     else:
         logger.error(f"Unknown Benchmark {args}")
         raise Exception(f"Unknown Benchmark {args}") 

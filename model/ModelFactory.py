@@ -3,6 +3,7 @@ from .VGG import *
 from .alexnet import createAlexNet
 from .simple_cnn import get_simple_cnn
 from .SignAlexNet import get_sign_alexnet
+from .powergrid_net import get_powergrid_net
 import logging 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ class ModelFactory:
             return VGG_D(class_num=class_num)
         elif model == 'VGG_E':
             return VGG_E(class_num=class_num)
+        elif model == 'PowerGridNet':
+            return get_powergrid_net(class_num=class_num)
+        
         else:
             logger.warn("ModelFactory received an unknown model %s", model)
             return None

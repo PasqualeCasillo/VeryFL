@@ -109,10 +109,10 @@ class PowerGrid(BenchMark):
     def __init__(self):
         super(PowerGrid,self).__init__('PowerGrid')
         self.global_args = {
-            'client_num': 10,  # Ridotto a 10 per test
+            'client_num': 5,  # Ridotto a 5 per test
             'model': 'PowerGridNet',
             'dataset': 'PowerGrid',
-            'batch_size': 32,
+            'batch_size': 64,
             'class_num': 2,
             'data_folder': './data',
             'communication_round': 100,  # Solo 100 round per test
@@ -120,11 +120,11 @@ class PowerGrid(BenchMark):
             'alpha': 0.5,
         }
         self.train_args = {
-            'optimizer': 'SGD',  # SGD è più stabile di Adam per questo dataset
+            'optimizer': 'Adam',  # SGD è più stabile di Adam per questo dataset
             'device': 'cpu',
-            'lr': 0.01,  # Learning rate più alto con SGD
-            'weight_decay': 0.0001,  
-            'num_steps': 10,  # Più epoche locali
+            'lr': 1e-3,  # Learning rate più alto con SGD
+            'weight_decay': 1e-4,  
+            'num_steps': 4,  # Più epoche locali
         }
         self.algorithm = FedAvg() 
    

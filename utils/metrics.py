@@ -31,9 +31,17 @@ class MetricsCalculator:
             all_labels, all_preds, average='weighted', zero_division=0
         )
         
+        # FIX AUC per classificazione binaria
         try:
-            auc = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='weighted')
-        except:
+            n_classes = all_probs.shape[1]
+            if n_classes == 2:
+                # Per classificazione binaria, usa solo la probabilità della classe positiva
+                auc = roc_auc_score(all_labels, all_probs[:, 1])
+            else:
+                # Per multi-classe, usa OvR
+                auc = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='weighted')
+        except Exception as e:
+            print(f"Warning: AUC calculation failed: {e}")
             auc = 0.0
         
         return {

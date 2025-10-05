@@ -25,8 +25,11 @@ class DecentralizedTask(Task):
             aggregation_method=aggregation_method
         )
         self.metrics_calculator = MetricsCalculator()
-        self.metrics_logger = MetricsLogger(save_dir=global_args.get('results_dir', 'results'))
-        self.plotter = MetricsPlotter(save_dir=global_args.get('results_dir', 'results') + '/plots')
+        
+        # Usa save_dir unico per tutti i file
+        save_dir = global_args.get('results_dir', 'results')
+        self.metrics_logger = MetricsLogger(save_dir=save_dir)
+        self.plotter = MetricsPlotter(save_dir=f'{save_dir}/plots')
         
     def _construct_nodes(self):
         logger.info(f"Constructing {len(self.client_list)} decentralized nodes")
@@ -54,20 +57,20 @@ class DecentralizedTask(Task):
         
         asyncio.run(self._run_auction_rounds())
         
-        # Generate plots and save metrics
-        self.metrics_logger.save()
+        # Salva con nome distintivo per dataset e modalità
+        dataset_name = self.global_args.get('dataset', 'unknown')
+        mode = self.global_args.get('mode', 'centralized')
+        
+        self.metrics_logger.save(f'{dataset_name}_{mode}_metrics.json')
         self.plotter.plot_all(self.metrics_logger.metrics)
         logger.info(f"Metrics and plots saved to {self.metrics_logger.save_dir}")
         
     async def _run_auction_rounds(self):
         for round_num in range(self.global_args['communication_round']):
-            logger.info(f"Starting auction-based FL round {round_num + 1}/{self.global_args['communication_round']}")
-            
             try:
                 result = await self.auction_protocol.execute_round(round_num, self.nodes)
                 
                 if result:
-                    # Calculate metrics
                     aggregator = next((n for n in self.nodes if n.role == 'aggregator'), self.nodes[0])
                     
                     global_metrics = self.metrics_calculator.calculate_all_metrics(
@@ -75,11 +78,16 @@ class DecentralizedTask(Task):
                         self.test_dataloader
                     )
                     
+                    # Per-node metrics sui LORO dati locali (non test set globale)
                     node_metrics = {}
                     for node in self.nodes:
+                        # Usa dataloader locale del nodo invece del test set globale
+                        test_loader = node.dataloader  # <--- FIX: usa dati del nodo
+                        
                         node_metrics[node.node_id] = self.metrics_calculator.calculate_all_metrics(
                             node.model,
-                            node.test_dataloader if node.test_dataloader else self.test_dataloader
+                            test_loader,
+                            device=self.train_args.get('device', 'cpu')
                         )
                     
                     avg_loss = result.get('aggregate_loss', 0.0)
@@ -92,21 +100,22 @@ class DecentralizedTask(Task):
                     )
                     
                     logger.info(
-                        f"Round {round_num + 1}: Loss={avg_loss:.4f}, "
-                        f"Acc={global_metrics['accuracy']:.4f}, "
-                        f"F1={global_metrics['f1']:.4f}, "
-                        f"Prec={global_metrics['precision']:.4f}, "
-                        f"Rec={global_metrics['recall']:.4f}, "
-                        f"AUC={global_metrics['auc']:.4f}"
+                        f"  Global → Acc={global_metrics['accuracy']:.3f}, "
+                        f"F1={global_metrics['f1']:.3f}, "
+                        f"Prec={global_metrics['precision']:.3f}, "
+                        f"Rec={global_metrics['recall']:.3f}"
                     )
-                    logger.info(f"Round {round_num + 1} completed successfully")
+                    
                 else:
                     logger.warning(f"Round {round_num + 1} failed")
                     
             except Exception as e:
                 logger.error(f"Critical error in round {round_num + 1}: {e}")
-                
-        logger.info("Decentralized federated learning completed")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        logger.info("━━━ Training Complete ━━━")
+        logger.info(f"Results saved to: {self.metrics_logger.save_dir}")
         
     def run(self):
         mode = self.global_args.get('mode', 'centralized')

@@ -23,6 +23,9 @@ class DatasetSpliter:
         random.shuffle(all_indices)
         
         dataloaders = {}
+        # sample_counts = []
+        
+        dataloaders = {}
         for idx, (client_id, _) in enumerate(client_list.items()):
             start = idx * samples_per_client
             end = (idx + 1) * samples_per_client if idx < client_num - 1 else total_samples
@@ -35,7 +38,7 @@ class DatasetSpliter:
                 sampler=sampler,
                 num_workers=4
             )
-            logger.info(f"Client {client_id}: {len(client_indices)} samples")
+            # logger.info(f"Data split: {sample_counts} samples per client")
         
         return dataloaders
     
@@ -74,6 +77,6 @@ class DatasetSpliter:
                 sampler=SubsetRandomSampler(indices),
                 num_workers=4
             )
-            logger.info(f"Client {client_id}: {len(indices)} samples")
+            #logger.info(f"Client {client_id}: {len(indices)} samples")
         
         return dataloaders

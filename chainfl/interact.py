@@ -144,7 +144,7 @@ class chainProxy():
         blockchain_id = None
         if self.client_manager:
             try:
-                logger.info(f"Registering client {self.client_num} on blockchain...")
+                logger.debug(f"Registering client {self.client_num} on blockchain...")
                 tx = self.client_manager.register({'from': client_account})
 
                 # Il contratto ritorna l'ID assegnato

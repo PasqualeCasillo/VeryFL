@@ -32,6 +32,6 @@ class MetricsLogger:
             for k, v in metrics.items():
                 self.metrics['per_node'][node_id][k].append(v)
     
-    def save(self, filename='metrics.json'):
+    def save(self, filename):
         with open(self.save_dir / filename, 'w') as f:
             json.dump(self.metrics, f, indent=2)

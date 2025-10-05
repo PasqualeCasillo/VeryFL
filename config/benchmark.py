@@ -117,7 +117,7 @@ class DecentralizedFashionMNIST(BenchMark):
             'batch_size': 32,
             'class_num': 10,
             'data_folder': './data',
-            'communication_round': 10,
+            'communication_round': 100,
             'non-iid': False,
             'alpha': 1,
             'mode': 'decentralized',
@@ -133,6 +133,69 @@ class DecentralizedFashionMNIST(BenchMark):
         }
         self.algorithm = FedAvg()
 
+class PowerGrid(BenchMark):
+    """
+    Power Grid Intrusion Detection Benchmark
+    
+    - Dataset: Smart Grid elettrico con attacchi simulati
+    - Task: Classificazione binaria (Natural vs Attack)
+    - Features: 128 misure elettriche
+    - Samples: ~5000 (4966)
+    - Distribuzione: ~78% Natural, ~22% Attack (sbilanciato)
+    """
+    def __init__(self):
+        super(PowerGrid, self).__init__('PowerGrid')
+        self.global_args = {
+            'client_num': 5,
+            'model': 'PowerGridMLP',
+            'dataset': 'PowerGrid',
+            'batch_size': 64,
+            'class_num': 2,
+            'data_folder': './data',
+            'communication_round': 50,
+            'non-iid': False,
+            'alpha': 1,
+            'input_dim': 128,  # Numero features PowerGrid
+        }
+        self.train_args = {
+            'optimizer': 'Adam',
+            'device': 'cuda',  # Cambia in 'cpu' se no GPU
+            'lr': 1e-3,
+            'weight_decay': 1e-4,
+            'num_steps': 3,
+        }
+        self.algorithm = FedAvg()
+
+
+class DecentralizedPowerGrid(BenchMark):
+    """
+    Decentralized Power Grid con auction protocol
+    """
+    def __init__(self):
+        super(DecentralizedPowerGrid, self).__init__('DecentralizedPowerGrid')
+        self.global_args = {
+            'client_num': 5,
+            'model': 'PowerGridMLP',
+            'dataset': 'PowerGrid',
+            'batch_size': 64,
+            'class_num': 2,
+            'data_folder': './data',
+            'communication_round': 100,
+            'non-iid': True,
+            'alpha': 0.5,
+            'mode': 'decentralized',
+            'auction_timeout': 180,
+            'aggregation_method': 'fedavg',
+            'input_dim': 128      
+        }
+        self.train_args = {
+            'optimizer': 'Adam',
+            'device': 'cpu',  # Decentralizzato è più sicuro su CPU
+            'lr': 1e-3,
+            'weight_decay': 1e-4,
+            'num_steps': 4        }
+        self.algorithm = FedAvg()
+
 def get_benchmark(args: str) -> BenchMark:
     if(args == "FashionMNIST"):
         return FashionMNIST()
@@ -142,6 +205,10 @@ def get_benchmark(args: str) -> BenchMark:
         return Sign()
     elif(args == "DecentralizedFashionMNIST"):
         return DecentralizedFashionMNIST()
+    elif args == "PowerGrid":  # <--- NUOVO
+        return PowerGrid()
+    elif args == "DecentralizedPowerGrid":  # <--- NUOVO
+        return DecentralizedPowerGrid()
     else:
         logger.error(f"Unknown Benchmark {args}")
         raise Exception(f"Unknown Benchmark {args}")

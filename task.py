@@ -107,7 +107,7 @@ class Task:
             # Verifica registrazione
             verification = chain_proxy.verify_client_registration(client_id)
             if verification['registered']:
-                logger.info(f"Client {client_id} verified on blockchain (ID: {verification['blockchain_id']})")
+                logger.debug(f"Client {client_id} verified on blockchain (ID: {verification['blockchain_id']})")
             else:
                 logger.warning(f"Client {client_id} verification failed: {verification['reason']}")
 

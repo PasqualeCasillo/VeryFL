@@ -30,26 +30,28 @@ class AuctionProtocol:
     async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[dict]:
         """Execute a complete auction-based FL round"""
         try:
-            logger.info(f"Starting auction protocol for round {round_num}")
-            
+            logger.info(f"Round {round_num + 1}")            
             # Phase 1: Deploy auction contract
             auction_address = await self._deploy_auction_contract(round_num, nodes)
             if not auction_address:
                 logger.error(f"Failed to deploy auction contract for round {round_num}")
                 return None
+            logger.info(f"Auction deployed")
                 
             # Phase 2: Collect offers from nodes
             success = await self._collect_offers(nodes, auction_address)
             if not success:
                 logger.warning(f"Not all nodes submitted offers for round {round_num}")
+            logger.info(f"Collected {sum(1 for _ in nodes)} offers")
                 
             # Phase 3: Wait for auction to close and get elected aggregator
             elected_aggregator = await self._wait_for_election(auction_address)
             if not elected_aggregator:
                 logger.error(f"No aggregator elected for round {round_num}")
                 return None
+            logger.info(f"✓ Aggregator: {elected_aggregator[:10]}...")
                 
-            logger.info(f"Aggregator elected for round {round_num}: {elected_aggregator}")
+            # logger.info(f"Aggregator elected for round {round_num}: {elected_aggregator}")
             
             # Phase 4: Execute FL round with elected aggregator
             fl_result = await self._execute_fl_round(nodes, elected_aggregator, round_num)
@@ -59,6 +61,7 @@ class AuctionProtocol:
             
             # Phase 5: Calculate aggregate loss
             aggregate_loss = self._calculate_aggregate_loss(nodes)
+            logger.info(f"Round complete: loss={aggregate_loss:.4f}")
             
             return {
                 'success': True,
@@ -218,8 +221,7 @@ class AuctionProtocol:
             avg_final_loss = sum(r['training']['final_loss'] for r in successful_results) / len(successful_results)
             avg_final_acc = sum(r['training']['final_accuracy'] for r in successful_results) / len(successful_results)
             
-            logger.info(f"Round aggregate: loss {avg_initial_loss:.4f}→{avg_final_loss:.4f}, "
-                       f"accuracy {avg_final_acc:.2f}%")
+            logger.info(f"  Training: loss {avg_initial_loss:.3f}→{avg_final_loss:.3f}, acc {avg_final_acc:.1f}%")
         
         return training_results
         

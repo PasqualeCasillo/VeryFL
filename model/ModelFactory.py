@@ -1,21 +1,22 @@
+# model/ModelFactory.py
 from .resnet import *
 from .VGG import *
 from .alexnet import createAlexNet
 from .simple_cnn import get_simple_cnn
 from .SignAlexNet import get_sign_alexnet
+from .PowerGridMLP import get_powergrid_mlp  # <--- NUOVO
 import logging 
 
 logger = logging.getLogger(__name__)
 
 class ModelFactory:
     '''
-    Server as an factory for user to get predefined neural network.
-    the one is ImageClassification Factory used to construct AlexNet, resnet with the known class_num.
+    Server as a factory for user to get predefined neural network.
     '''
-    def __init__(self,)->None:
+    def __init__(self) -> None:
         return
+    
     def get_model(self, model, class_num, args={}):
-        #now model could be: resnet, alexnet, ...
         if model == 'resnet18':
             return ResNet18(class_num)
         elif model == 'resnet34':
@@ -38,10 +39,12 @@ class ModelFactory:
             return VGG_D(class_num=class_num)
         elif model == 'VGG_E':
             return VGG_E(class_num=class_num)
+        elif model == 'PowerGridMLP':  # <--- NUOVO
+            input_dim = args.get('input_dim', 128)
+            return get_powergrid_mlp(class_num=class_num, input_dim=input_dim)
         else:
             logger.warn("ModelFactory received an unknown model %s", model)
-            return None
-            raise Exception(f"Unrecognized Model")
+            raise Exception(f"Unrecognized Model: {model}")
     
     def get_sign_model(self, model, class_num, in_channels, watermark_args):
         if model == 'SignAlexNet':
@@ -49,5 +52,3 @@ class ModelFactory:
         else:
             logger.error("ModelFactory received an unknown model %s", model)
             raise Exception(f"Unrecognized Model")
-        
-

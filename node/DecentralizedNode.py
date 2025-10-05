@@ -29,8 +29,9 @@ class DecentralizedNode:
         
         from collections import Counter
         class_dist = Counter(labels)
-        logger.info(f"Node {node_id} class distribution: {class_dist}")
-        logger.info(f"Node {node_id} dataset size: {len(labels)}")
+        #logger.info(f"Node {node_id} class distribution: {class_dist}")
+        #logger.info(f"Node {node_id} dataset size: {len(labels)}")
+        logger.debug(f"Node {node_id}: {len(labels)} samples, dist={dict(class_dist)}")
         
         # Node capabilities
         self.compute_power = self._calculate_compute_power()

@@ -176,61 +176,94 @@ class AuctionProtocol:
         
     async def _execute_fl_round(self, nodes, elected_aggregator, round_num):
         """
-        Protocollo ridotto: coordina ma NON trasferisce dati
+        Protocollo ridotto: coordina ma NON trasferisce dati in-memory
         """
         import brownie
         from chainfl.ipfs_client import IPFSClient
-        
-        # IPFS client condiviso
+
         ipfs_client = IPFSClient()
-        
+
         # 1. Assegna ruoli
         aggregator_node = None
         for node in nodes:
             node_index = int(node.node_id)
             real_address = brownie.accounts[node_index].address
-            
+
             if real_address.lower() == elected_aggregator.lower():
                 node.set_role("aggregator", round_num)
                 aggregator_node = node
             else:
                 node.set_role("participant", round_num)
-        
-        # 2. Training parallelo (invariato)
+
+        # 2. Training parallelo
         await self._train_all_nodes(nodes)
-        
-        # 3. NUOVO: Ogni nodo uploada autonomamente
-        logger.info("Nodes uploading models to IPFS autonomously...")
+
+        # 3. Participants uploadano su IPFS
+        logger.info("Participants uploading models to IPFS...")
         upload_tasks = []
         for node in nodes:
-            if node.role == "participant":  # Aggregatore uploada dopo
+            if node.role == "participant":
                 task = node.upload_model_to_blockchain_and_ipfs(
                     ipfs_client, 
                     self.blockchain, 
                     self.current_auction_address
                 )
                 upload_tasks.append(asyncio.create_task(task))
-        
+
         results = await asyncio.gather(*upload_tasks)
-        successful_uploads = sum(results)
-        logger.info(f"✓ {successful_uploads} participants uploaded to IPFS")
-        
-        # 4. NUOVO: Aggregatore scarica e aggrega
-        logger.info("Aggregator downloading from IPFS and aggregating...")
+        logger.info(f"{sum(results)} participants uploaded")
+
+        # 4. Aggregatore scarica, aggrega e UPLOADA su IPFS
+        logger.info("Aggregator downloading, aggregating and uploading to IPFS...")
         aggregated_model = await aggregator_node.aggregate_from_ipfs(
             ipfs_client,
             self.blockchain,
             self.current_auction_address
         )
-        
+
         if not aggregated_model:
-            logger.error("Aggregation from IPFS failed")
+            logger.error("Aggregation failed")
             return None
-        
-        # 5. Distribuzione (può rimanere centralizzata o migliorare)
-        await self._distribute_global_model(nodes, aggregated_model)
-        
+
+        # NUOVA PARTE: Aggregatore uploada modello globale su IPFS
+        global_ipfs_hash = await aggregator_node.upload_global_model_to_ipfs(
+            ipfs_client,
+            aggregated_model,
+            self.current_auction_address
+        )
+
+        if not global_ipfs_hash:
+            logger.error("Global model upload to IPFS failed")
+            return None
+
+        logger.info(f"Global model on IPFS: {global_ipfs_hash}")
+
+        # 5. DISTRIBUZIONE DECENTRALIZZATA (non più in-memory!)
+        await self._distribute_via_ipfs(nodes, ipfs_client)
+
         return aggregated_model
+
+
+    #    NUOVA FUNZIONE: Distribuzione decentralizzata
+    async def _distribute_via_ipfs(self, nodes: List[DecentralizedNode], ipfs_client):
+        """
+        I nodi scaricano AUTONOMAMENTE da IPFS leggendo l'hash dalla blockchain.
+        Nessun trasferimento in-memory!
+        """
+        logger.info(" Nodes downloading global model from IPFS autonomously...")
+        
+        # Aspetta che tutti i nodi scarichino in PARALLELO
+        download_tasks = [
+            node.download_global_model_from_ipfs(ipfs_client, self.current_auction_address)
+            for node in nodes
+        ]
+        
+        results = await asyncio.gather(*download_tasks)
+        successful = sum(results)
+        
+        logger.info(f" {successful}/{len(nodes)} nodes downloaded global model")
+        
+        return successful == len(nodes)
         
     async def _train_all_nodes(self, nodes: List[DecentralizedNode]) -> List[Dict]:
         """Train all nodes with metrics aggregation"""
@@ -342,18 +375,18 @@ class AuctionProtocol:
             logger.error(traceback.format_exc())
             return None
             
-    async def _distribute_global_model(self, nodes: List[DecentralizedNode], 
-                                     global_model: Dict) -> bool:
-        """Distribute global model to all nodes"""
-        try:
-            for node in nodes:
-                node.load_state_dict(global_model)
+    # async def _distribute_global_model(self, nodes: List[DecentralizedNode], 
+    #                                  global_model: Dict) -> bool:
+    #     """Distribute global model to all nodes"""
+    #     try:
+    #         for node in nodes:
+    #             node.load_state_dict(global_model)
                 
-            logger.info("Global model distributed to all nodes")
-            return True
-        except Exception as e:
-            logger.error(f"Error distributing global model: {e}")
-            return False
+    #         logger.info("Global model distributed to all nodes")
+    #         return True
+    #     except Exception as e:
+    #         logger.error(f"Error distributing global model: {e}")
+    #         return False
         
     def _calculate_aggregate_loss(self, nodes):
         """Calculate average loss from all nodes' training results"""

@@ -141,6 +141,87 @@ class DecentralizedNode:
             logger.error(traceback.format_exc())
             return None    
     
+    async def upload_global_model_to_ipfs(self, ipfs_client, aggregated_model, auction_address):
+        """
+        L'AGGREGATORE uploada il modello globale su IPFS e registra l'hash sulla blockchain.
+        Chiamato SOLO dal nodo aggregatore dopo l'aggregazione.
+        """
+        try:
+            logger.info(f"Aggregator {self.node_id} uploading GLOBAL model to IPFS...")
+
+            # 1. Upload su IPFS
+            ipfs_hash = ipfs_client.upload_model(aggregated_model, metadata={
+                'type': 'global_aggregated',
+                'round': self.current_round,
+                'aggregator': self.node_id
+            })
+
+            if not ipfs_hash:
+                logger.error(f" Aggregator failed IPFS upload")
+                return None
+
+            logger.info(f" Global model uploaded to IPFS: {ipfs_hash}")
+
+            # 2. Registra hash sulla blockchain
+            import brownie
+            node_index = int(self.node_id)
+            aggregator_account = brownie.accounts[node_index]
+
+            contracts = brownie.project.chainServer
+            auction_contract = contracts.AggregatorAuction.at(auction_address)
+
+            # CHIAMA submitGlobalModel() del contratto
+            tx = auction_contract.submitGlobalModel(ipfs_hash, {'from': aggregator_account})
+            logger.info(f"Global hash registered on blockchain: {tx.txid}")
+
+            return ipfs_hash
+
+        except Exception as e:
+            logger.error(f"Aggregator upload failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+        
+    async def download_global_model_from_ipfs(self, ipfs_client, auction_address):
+        """
+        Ogni nodo AUTONOMAMENTE scarica il modello globale da IPFS.
+        Legge l'hash dalla blockchain e scarica da IPFS.
+        """
+        try:
+            logger.info(f"Node {self.node_id} downloading GLOBAL model from IPFS...")
+
+            # 1. Leggi hash dalla blockchain
+            import brownie
+            contracts = brownie.project.chainServer
+            auction_contract = contracts.AggregatorAuction.at(auction_address)
+
+            # CHIAMA getGlobalModelHash() del contratto
+            global_ipfs_hash = auction_contract.getGlobalModelHash()
+
+            if not global_ipfs_hash:
+                logger.error(f"No global model hash on blockchain")
+                return False
+
+            logger.info(f"Read global hash from blockchain: {global_ipfs_hash[:10]}...")
+
+            # 2. Scarica da IPFS
+            global_model_data = ipfs_client.download_model(global_ipfs_hash)
+
+            if not global_model_data:
+                logger.error(f" Failed to download from IPFS")
+                return False
+
+            # 3. Carica nel proprio modello locale
+            self.load_state_dict(global_model_data)
+            logger.info(f"Node {self.node_id} loaded global model successfully")
+
+            return True
+
+        except Exception as e:
+            logger.error(f" Node {self.node_id} download failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
     
     def _calculate_compute_power(self) -> int:
         """Calculate node's computational capacity"""

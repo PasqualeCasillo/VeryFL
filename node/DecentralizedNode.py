@@ -39,6 +39,109 @@ class DecentralizedNode:
         self.reliability = self._calculate_reliability()
         self.data_size = len(labels)
         
+    async def upload_model_to_blockchain_and_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
+        """
+        Upload del modello: Node → IPFS → Blockchain
+        Chiamato AUTONOMAMENTE dal nodo dopo l'elezione
+        """
+        try:
+            # 1. Upload su IPFS
+            logger.info(f"Node {self.node_id} uploading model to IPFS...")
+            
+            model_data = self.get_model_state_dict()
+            ipfs_hash = ipfs_client.upload_model(model_data, metadata={
+                'node_id': self.node_id,
+                'round': self.current_round
+            })
+            
+            if not ipfs_hash:
+                logger.error(f"Node {self.node_id} failed IPFS upload")
+                return False
+            
+            logger.info(f"Node {self.node_id} uploaded to IPFS: {ipfs_hash}")
+            
+            # 2. Registra hash sulla blockchain
+            import brownie
+            node_index = int(self.node_id)
+            node_account = brownie.accounts[node_index]
+            
+            # Ottieni il contratto dall'indirizzo
+            contracts = brownie.project.chainServer
+            auction_contract = contracts.AggregatorAuction.at(auction_address)
+            
+            tx = auction_contract.submitModelHash(ipfs_hash, {'from': node_account})
+            logger.info(f"Node {self.node_id} registered hash on blockchain: {tx.txid}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Node {self.node_id} upload failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+        
+    async def aggregate_from_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
+        """
+        L'aggregatore scarica i modelli da IPFS usando gli hash dalla blockchain.
+        NESSUN intermediario: Blockchain → IPFS → Aggregatore
+        """
+        logger.warning(f"Node {self.node_id} (AGGREGATOR) starting aggregation from IPFS")
+        
+        try:
+            # 1. Leggi gli hash dalla blockchain
+            import brownie
+            contracts = brownie.project.chainServer
+            auction_contract = contracts.AggregatorAuction.at(auction_address)
+            
+            ipfs_hashes = auction_contract.getAllModelHashes()
+            logger.info(f"Aggregator found {len(ipfs_hashes)} model hashes on blockchain")
+            
+            # 2. Scarica i modelli da IPFS
+            downloaded_models = []
+            
+            for idx, ipfs_hash in enumerate(ipfs_hashes):
+                if not ipfs_hash:  # Skip vuoti
+                    continue
+                
+                # Filtra il proprio modello (opzionale)
+                node_index = int(self.node_id)
+                if idx == node_index:
+                    # Usa il proprio modello già in memoria
+                    downloaded_models.append(self.get_model_state_dict())
+                    logger.info(f"Using own model for aggregation")
+                else:
+                    # Scarica dagli altri nodi
+                    logger.info(f"Downloading model from IPFS: {ipfs_hash[:10]}...")
+                    model_data = ipfs_client.download_model(ipfs_hash)
+                    
+                    if model_data:
+                        downloaded_models.append(model_data)
+                        logger.info(f"✓ Downloaded model {idx+1}")
+                    else:
+                        logger.warning(f"✗ Failed to download model {idx+1}")
+            
+            logger.info(f"Aggregator downloaded {len(downloaded_models)} models")
+            
+            # 3. Aggrega (FedAvg)
+            aggregated_state = {}
+            num_models = len(downloaded_models)
+            
+            for key in downloaded_models[0].keys():
+                aggregated_state[key] = sum(
+                    model[key] for model in downloaded_models
+                ) / num_models
+            
+            logger.warning(f" Node {self.node_id} completed aggregation from IPFS")
+            
+            return aggregated_state
+            
+        except Exception as e:
+            logger.error(f"Aggregator IPFS aggregation failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None    
+    
+    
     def _calculate_compute_power(self) -> int:
         """Calculate node's computational capacity"""
         total_params = sum(p.numel() for p in self.model.parameters())

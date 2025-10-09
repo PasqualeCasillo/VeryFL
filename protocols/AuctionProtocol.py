@@ -174,34 +174,63 @@ class AuctionProtocol:
         logger.error(f"Election timeout after {max_wait_time}s")
         return None
         
-    async def _execute_fl_round(self, nodes: List[DecentralizedNode], 
-                              elected_aggregator: str, round_num: int) -> str:
-        """Execute FL training round with elected aggregator"""
-        # MODIFICA: Confronta con indirizzi reali Ganache
+    async def _execute_fl_round(self, nodes, elected_aggregator, round_num):
+        """
+        Protocollo ridotto: coordina ma NON trasferisce dati
+        """
         import brownie
+        from chainfl.ipfs_client import IPFSClient
         
+        # IPFS client condiviso
+        ipfs_client = IPFSClient()
+        
+        # 1. Assegna ruoli
+        aggregator_node = None
         for node in nodes:
             node_index = int(node.node_id)
             real_address = brownie.accounts[node_index].address
             
             if real_address.lower() == elected_aggregator.lower():
                 node.set_role("aggregator", round_num)
+                aggregator_node = node
             else:
                 node.set_role("participant", round_num)
-                
-        # Execute parallel training with metrics collection
-        training_results = await self._train_all_nodes(nodes)
-        logger.info(f"Completed training for {len(training_results)} nodes")
         
-        # Upload models and perform aggregation
-        upload_results = await self._upload_models(nodes)
-        if upload_results:
-            aggregated_model = await self._perform_aggregation(nodes, elected_aggregator)
-            if aggregated_model:
-                await self._distribute_global_model(nodes, aggregated_model)
-                return aggregated_model
-                
-        return None
+        # 2. Training parallelo (invariato)
+        await self._train_all_nodes(nodes)
+        
+        # 3. NUOVO: Ogni nodo uploada autonomamente
+        logger.info("Nodes uploading models to IPFS autonomously...")
+        upload_tasks = []
+        for node in nodes:
+            if node.role == "participant":  # Aggregatore uploada dopo
+                task = node.upload_model_to_blockchain_and_ipfs(
+                    ipfs_client, 
+                    self.blockchain, 
+                    self.current_auction_address
+                )
+                upload_tasks.append(asyncio.create_task(task))
+        
+        results = await asyncio.gather(*upload_tasks)
+        successful_uploads = sum(results)
+        logger.info(f"✓ {successful_uploads} participants uploaded to IPFS")
+        
+        # 4. NUOVO: Aggregatore scarica e aggrega
+        logger.info("Aggregator downloading from IPFS and aggregating...")
+        aggregated_model = await aggregator_node.aggregate_from_ipfs(
+            ipfs_client,
+            self.blockchain,
+            self.current_auction_address
+        )
+        
+        if not aggregated_model:
+            logger.error("Aggregation from IPFS failed")
+            return None
+        
+        # 5. Distribuzione (può rimanere centralizzata o migliorare)
+        await self._distribute_global_model(nodes, aggregated_model)
+        
+        return aggregated_model
         
     async def _train_all_nodes(self, nodes: List[DecentralizedNode]) -> List[Dict]:
         """Train all nodes with metrics aggregation"""

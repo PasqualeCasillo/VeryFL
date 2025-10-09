@@ -266,57 +266,52 @@ class AuctionProtocol:
             return False
     
             
-    # protocols/AuctionProtocol.py - metodo _perform_aggregation
     async def _perform_aggregation(self, nodes: List[DecentralizedNode], 
                                      aggregator_address: str) -> Optional[Dict]:
-            try:
-                import brownie
+        """
+        Delegate aggregation to the elected aggregator node.
+        The aggregator collects models and computes FedAvg.
+        """
+        try:
+            import brownie
+            
+            # Find the aggregator node
+            aggregator_node = None
+            participant_nodes = []
+            
+            for node in nodes:
+                node_index = int(node.node_id)
+                real_address = brownie.accounts[node_index].address
                 
-                aggregator_node = None
-                for node in nodes:
-                    node_index = int(node.node_id)
-                    real_address = brownie.accounts[node_index].address
-                    if real_address.lower() == aggregator_address.lower():
-                        aggregator_node = node
-                        break
-                        
-                if not aggregator_node:
-                    logger.error("Aggregator node not found")
-                    return None
-                    
-                model_states = [node.get_model_state_dict() for node in nodes]
-                
-                # Verifica compatibilità
-                first_keys = set(model_states[0].keys())
-                for i, state in enumerate(model_states[1:], 1):
-                    if set(state.keys()) != first_keys:
-                        logger.error(f"Node {i} model keys mismatch")
-                        return None
-                    for key in first_keys:
-                        if model_states[0][key].shape != state[key].shape:
-                            logger.error(f"Node {i} tensor shape mismatch for {key}")
-                            return None
-                
-                # Scegli metodo aggregazione
-                if self.aggregator:
-                    logger.info(f"Using {self.aggregation_method} aggregation")
-                    aggregated_state = self.aggregator._aggregate_alg(model_states)
+                if real_address.lower() == aggregator_address.lower():
+                    aggregator_node = node
                 else:
-                    # FedAvg default
-                    logger.info("Using FedAvg aggregation")
-                    aggregated_state = {}
-                    num_models = len(model_states)
-                    for key in model_states[0].keys():
-                        aggregated_state[key] = sum(state[key] for state in model_states) / num_models
-                        
-                logger.info(f"Aggregation completed by node {aggregator_node.node_id}")
-                return aggregated_state
-                
-            except Exception as e:
-                logger.error(f"Error in aggregation: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+                    participant_nodes.append(node)
+            
+            if not aggregator_node:
+                logger.error("Aggregator node not found")
                 return None
+            
+            logger.info(f"Aggregator: Node {aggregator_node.node_id}")
+            logger.info(f"Participants: {len(participant_nodes)} nodes")
+            
+            # Collect participant models (in-memory, no IPFS needed)
+            participant_models = [
+                node.get_model_state_dict() 
+                for node in participant_nodes
+            ]
+            
+            # KEY CHANGE: Aggregator performs the computation
+            aggregated_state = aggregator_node.aggregate_models(participant_models)
+            
+            logger.info(f"Aggregation completed by node {aggregator_node.node_id}")
+            return aggregated_state
+            
+        except Exception as e:
+            logger.error(f"Error in aggregation: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
             
     async def _distribute_global_model(self, nodes: List[DecentralizedNode], 
                                      global_model: Dict) -> bool:

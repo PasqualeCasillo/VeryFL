@@ -1,6 +1,6 @@
 # node/DecentralizedNode.py
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List 
 from copy import deepcopy
 import random
 import torch
@@ -160,3 +160,34 @@ class DecentralizedNode:
             'dataSize': self.data_size,
             'cost': max(1, int(base_cost * random.uniform(0.7, 1.3)))  # Garantisce cost >= 1
         }
+        
+    def aggregate_models(self, other_nodes_models: List[Dict]) -> Dict:
+        """
+        Perform FedAvg aggregation on received models.
+        This method is called ONLY if this node is the elected aggregator.
+
+        Args:
+            other_nodes_models: List of state_dicts from other nodes
+
+        Returns:
+            Aggregated state_dict (global model)
+        """
+        logger.info(f"Node {self.node_id} executing aggregation (elected aggregator)")
+
+        logger.warning(f"NODE {self.node_id} IS PERFORMING AGGREGATION")
+        logger.warning(f"Role: {self.role}")
+        logger.warning(f"Models received: {len(other_nodes_models)}")
+        # Include own model in aggregation
+        all_models = other_nodes_models + [self.get_model_state_dict()]
+        num_models = len(all_models)
+
+        logger.info(f"Aggregating {num_models} models (including own)")
+
+        # FedAvg: simple averaging
+        aggregated_state = {}
+        for key in all_models[0].keys():
+            # Sum all model parameters
+            aggregated_state[key] = sum(model[key] for model in all_models) / num_models
+
+        logger.info(f"Aggregation complete - {len(aggregated_state)} parameters updated")
+        return aggregated_state

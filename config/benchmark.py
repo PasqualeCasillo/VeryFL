@@ -195,6 +195,41 @@ class DecentralizedPowerGrid(BenchMark):
             'weight_decay': 1e-4,
             'num_steps': 4        }
         self.algorithm = FedAvg()
+        
+        
+class DecentralizedPowerGridAttack(BenchMark):
+    """Benchmark PowerGrid con attacco label flipping"""
+    
+    def __init__(self):
+        super(DecentralizedPowerGridAttack, self).__init__('DecentralizedPowerGridAttack')
+        self.global_args = {
+            'client_num': 7,
+            'model': 'PowerGridMLP',
+            'dataset': 'PowerGrid',
+            'batch_size': 64,
+            'class_num': 2,
+            'data_folder': './data',
+            'communication_round': 100,
+            'non-iid': True,
+            'alpha': 0.5,
+            'mode': 'decentralized',
+            'auction_timeout': 180,
+            'aggregation_method': 'fedavg',
+            'input_dim': 128,
+            
+            # NUOVO: Configurazione attacco
+            'attack_type': 'label_flipping',
+            'byzantine_ratio': 0.4,  # 40% nodi Byzantine (2/5)
+            'attack_start_round': 50,
+        }
+        self.train_args = {
+            'optimizer': 'Adam',
+            'device': 'cpu',
+            'lr': 1e-3,
+            'weight_decay': 1e-4,
+            'num_steps': 4
+        }
+        self.algorithm = FedAvg()
 
 def get_benchmark(args: str) -> BenchMark:
     if(args == "FashionMNIST"):
@@ -205,10 +240,12 @@ def get_benchmark(args: str) -> BenchMark:
         return Sign()
     elif(args == "DecentralizedFashionMNIST"):
         return DecentralizedFashionMNIST()
-    elif args == "PowerGrid":  # <--- NUOVO
+    elif args == "PowerGrid":  # NUOVO
         return PowerGrid()
-    elif args == "DecentralizedPowerGrid":  # <--- NUOVO
+    elif args == "DecentralizedPowerGrid":  # NUOVO
         return DecentralizedPowerGrid()
+    elif args == "DecentralizedPowerGridAttack": # NUOVO con attacco
+        return DecentralizedPowerGridAttack()
     else:
         logger.error(f"Unknown Benchmark {args}")
         raise Exception(f"Unknown Benchmark {args}")

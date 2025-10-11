@@ -13,11 +13,12 @@ logger = logging.getLogger(__name__)
 
 class AuctionProtocol:
     def __init__(self, blockchain_proxy, timeout_seconds: int = 300, 
-                 aggregation_method: str = 'fedavg'):
+                 aggregation_method: str = 'fedavg', attack_config=None):
         self.blockchain = blockchain_proxy
         self.timeout_seconds = timeout_seconds
         self.current_auction_address = None
         self.aggregation_method = aggregation_method
+        self.attack_config = attack_config
         
         # Inizializza aggregatore
         if aggregation_method == 'krum':
@@ -49,7 +50,7 @@ class AuctionProtocol:
             if not elected_aggregator:
                 logger.error(f"No aggregator elected for round {round_num}")
                 return None
-            logger.info(f"✓ Aggregator: {elected_aggregator[:10]}...")
+            logger.info(f"Aggregator: {elected_aggregator[:10]}...")
                 
             # logger.info(f"Aggregator elected for round {round_num}: {elected_aggregator}")
             
@@ -408,3 +409,16 @@ class AuctionProtocol:
                 count += 1
 
         return total_loss / count if count > 0 else 0.0
+    
+    def configure_nodes_attack(self, nodes):
+        """Configura nodi Byzantine secondo attack_config"""
+        if not self.attack_config:
+            logger.info("No attack configuration, all nodes honest")
+            return
+        
+        total_nodes = len(nodes)
+        for node in nodes:
+            node.configure_attack(self.attack_config, total_nodes)
+        
+        byzantine_count = sum(1 for n in nodes if n.is_byzantine)
+        logger.info(f"Attack configured: {byzantine_count}/{total_nodes} Byzantine nodes")

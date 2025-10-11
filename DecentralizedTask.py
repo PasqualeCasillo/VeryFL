@@ -9,6 +9,7 @@ from utils.metrics import MetricsCalculator
 from utils.metrics_logger import MetricsLogger
 from utils.plotter import MetricsPlotter
 from copy import deepcopy
+from config.attack_config import AttackConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +20,25 @@ class DecentralizedTask(Task):
         
         aggregation_method = global_args.get('aggregation_method', 'fedavg')
         
+        # NUOVO: Configurazione attacco
+        self.attack_config = AttackConfig(
+            attack_type=global_args.get('attack_type', 'none'),
+            byzantine_ratio=global_args.get('byzantine_ratio', 0.0),
+            attack_start_round=global_args.get('attack_start_round', 0)
+        )
+        
         self.auction_protocol = AuctionProtocol(
             blockchain_proxy=auction_chain_proxy,
             timeout_seconds=global_args.get('auction_timeout', 300),
             aggregation_method=aggregation_method
         )
-        self.metrics_calculator = MetricsCalculator()
+        
+        self.auction_protocol = AuctionProtocol(
+            blockchain_proxy=auction_chain_proxy,
+            timeout_seconds=global_args.get('auction_timeout', 300),
+            aggregation_method=aggregation_method,
+            attack_config=self.attack_config
+        )
         
         # Usa save_dir unico per tutti i file
         save_dir = global_args.get('results_dir', 'results')
@@ -34,6 +48,8 @@ class DecentralizedTask(Task):
     def _construct_nodes(self):
         logger.info(f"Constructing {len(self.client_list)} decentralized nodes")
         
+        num_classes = self.global_args.get('class_num', 10)
+        
         for client_id, _ in self.client_list.items():
             node = DecentralizedNode(
                 node_id=client_id,
@@ -41,10 +57,14 @@ class DecentralizedTask(Task):
                 dataloader=self.train_dataloader_list[client_id],
                 trainer_class=self.trainer,
                 train_args=self.train_args,
-                test_dataloader=self.test_dataloader
+                test_dataloader=self.test_dataloader,
+                num_classes=num_classes
             )
             self.nodes.append(node)
-            
+        
+        # Configura attacco sui nodi
+        self.auction_protocol.configure_nodes_attack(self.nodes)
+        
         logger.info(f"Created {len(self.nodes)} decentralized nodes")
         
     def run_decentralized(self):
@@ -78,26 +98,47 @@ class DecentralizedTask(Task):
                         self.test_dataloader
                     )
                     
-                    # Per-node metrics sui LORO dati locali (non test set globale)
+                    # Per-node metrics
                     node_metrics = {}
                     for node in self.nodes:
-                        # Usa dataloader locale del nodo invece del test set globale
-                        test_loader = node.dataloader  # <--- FIX: usa dati del nodo
+                        test_loader = node.dataloader
                         
                         node_metrics[node.node_id] = self.metrics_calculator.calculate_all_metrics(
                             node.model,
                             test_loader,
                             device=self.train_args.get('device', 'cpu')
                         )
+                        
+                        # NUOVO: Aggiungi flag Byzantine alle metriche
+                        node_metrics[node.node_id]['is_byzantine'] = node.is_byzantine
                     
                     avg_loss = result.get('aggregate_loss', 0.0)
+                    
+                    # NUOVO: Identifica nodi Byzantine e stato attacco
+                    byzantine_nodes = [n.node_id for n in self.nodes if n.is_byzantine]
+                    attack_active = self.attack_config.is_active(round_num)
                     
                     self.metrics_logger.log_round(
                         round_num + 1,
                         global_metrics,
                         node_metrics,
-                        avg_loss
+                        avg_loss,
+                        byzantine_nodes=byzantine_nodes,  # NUOVO
+                        attack_active=attack_active       # NUOVO
                     )
+                    
+                    # NUOVO: Log dettagliato per debug
+                    if attack_active:
+                        honest_acc = [node_metrics[n.node_id]['accuracy'] 
+                                     for n in self.nodes if not n.is_byzantine]
+                        byz_acc = [node_metrics[n.node_id]['accuracy'] 
+                                  for n in self.nodes if n.is_byzantine]
+                        
+                        logger.info(
+                            f"  Attack Active - "
+                            f"Honest nodes avg acc: {sum(honest_acc)/len(honest_acc):.3f}, "
+                            f"Byzantine nodes avg acc: {sum(byz_acc)/len(byz_acc) if byz_acc else 0:.3f}"
+                        )
                     
                     logger.info(
                         f"  Global → Acc={global_metrics['accuracy']:.3f}, "
@@ -114,7 +155,7 @@ class DecentralizedTask(Task):
                 import traceback
                 logger.error(traceback.format_exc())
         
-        logger.info("━━━ Training Complete ━━━")
+        logger.info("Training Complete")
         logger.info(f"Results saved to: {self.metrics_logger.save_dir}")
         
     def run(self):

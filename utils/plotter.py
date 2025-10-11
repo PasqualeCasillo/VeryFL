@@ -19,6 +19,67 @@ class MetricsPlotter:
         if metrics.get('per_node'):
             self._plot_per_node(metrics)
         self._plot_combined(metrics)
+        
+        # NUOVO: Plot specifico per attacco
+        if any(metrics.get('attack_active', [])):
+            self._plot_attack_impact(metrics)
+    
+    def _plot_attack_impact(self, metrics):
+        """Plot impatto attacco Byzantine"""
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Subplot 1: Global accuracy con marcatori attacco
+        ax1 = axes[0, 0]
+        ax1.plot(metrics['rounds'], metrics['accuracy'], 'o-', linewidth=2, label='Global Accuracy')
+        
+        # Evidenzia round con attacco
+        attack_rounds = [r for r, active in zip(metrics['rounds'], metrics['attack_active']) if active]
+        attack_accs = [acc for acc, active in zip(metrics['accuracy'], metrics['attack_active']) if active]
+        ax1.scatter(attack_rounds, attack_accs, color='red', s=100, marker='x', 
+                   label='Attack Active', zorder=5)
+        
+        ax1.set_xlabel('Round')
+        ax1.set_ylabel('Accuracy')
+        ax1.set_title('Global Accuracy (Attack Periods Marked)')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # # Subplot 2: Loss separata Honest vs Byzantine
+        # ax2 = axes[0, 1]
+        # ax2.plot(metrics['rounds'], metrics['honest_avg_loss'], 'o-', 
+        #         label='Honest Nodes Avg Loss', linewidth=2)
+        # ax2.plot(metrics['rounds'], metrics['byzantine_avg_loss'], 's-', 
+        #         label='Byzantine Nodes Avg Loss', linewidth=2, color='red')
+        # ax2.set_xlabel('Round')
+        # ax2.set_ylabel('Loss')
+        # ax2.set_title('Loss: Honest vs Byzantine Nodes')
+        # ax2.legend()
+        # ax2.grid(True, alpha=0.3)
+        
+        # Subplot 3: F1-Score con attacco
+        ax3 = axes[1, 0]
+        ax3.plot(metrics['rounds'], metrics['f1'], 'o-', linewidth=2, label='F1-Score')
+        attack_f1s = [f1 for f1, active in zip(metrics['f1'], metrics['attack_active']) if active]
+        ax3.scatter(attack_rounds, attack_f1s, color='red', s=100, marker='x', 
+                   label='Attack Active', zorder=5)
+        ax3.set_xlabel('Round')
+        ax3.set_ylabel('F1-Score')
+        ax3.set_title('F1-Score (Attack Periods Marked)')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # # Subplot 4: Numero nodi Byzantine per round
+        # ax4 = axes[1, 1]
+        # byzantine_counts = [len(nodes) for nodes in metrics['byzantine_nodes']]
+        # ax4.bar(metrics['rounds'], byzantine_counts, alpha=0.7, color='red')
+        # ax4.set_xlabel('Round')
+        # ax4.set_ylabel('Number of Byzantine Nodes')
+        # ax4.set_title('Byzantine Nodes per Round')
+        # ax4.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(self.save_dir / 'attack_impact.png', dpi=300, bbox_inches='tight')
+        plt.close()
     
     def _plot_main_metrics(self, metrics):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))

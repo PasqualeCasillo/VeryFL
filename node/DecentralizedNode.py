@@ -7,12 +7,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from client.base.baseTrainer import BaseTrainer
+from utils.attack_utils import create_flipped_dataloader
 
 logger = logging.getLogger(__name__)
 
 class DecentralizedNode:
     def __init__(self, node_id: str, model: nn.Module, dataloader: DataLoader, 
-                 trainer_class: BaseTrainer, train_args: dict, test_dataloader: DataLoader = None):
+                 trainer_class: BaseTrainer, train_args: dict, test_dataloader: DataLoader = None,
+                 num_classes: int = 10):
         self.node_id = node_id
         self.model = deepcopy(model)
         self.dataloader = dataloader
@@ -21,6 +23,9 @@ class DecentralizedNode:
         self.test_dataloader = test_dataloader
         self.role = "participant"
         self.current_round = 0
+        self.is_byzantine = False
+        self.attack_config = None
+        self.num_classes = num_classes
         
         # Verifica distribuzione corretta
         labels = []
@@ -114,9 +119,9 @@ class DecentralizedNode:
                     
                     if model_data:
                         downloaded_models.append(model_data)
-                        logger.info(f"✓ Downloaded model {idx+1}")
+                        logger.info(f"Downloaded model {idx+1}")
                     else:
-                        logger.warning(f"✗ Failed to download model {idx+1}")
+                        logger.warning(f"Failed to download model {idx+1}")
             
             logger.info(f"Aggregator downloaded {len(downloaded_models)} models")
             
@@ -241,15 +246,35 @@ class DecentralizedNode:
         logger.info(f"Node {self.node_id} assigned role: {role} for round {round_num}")
         
     def train_local_model(self) -> Dict[str, Any]:
-        """Train local model and return results with metrics"""
+        """Train local model (con possibile poisoning)"""
         logger.info(f"Node {self.node_id} starting local training for round {self.current_round}")
+        
+        use_poisoned_data = (
+            self.is_byzantine and 
+            self.attack_config and 
+            self.attack_config.is_active(self.current_round) and
+            self.attack_config.attack_type == 'label_flipping'
+        )
+        
+        if use_poisoned_data:
+            logger.warning(f"Node {self.node_id} POISONING data with label flipping")
+            from utils.attack_utils import create_flipped_dataloader
+            
+            training_dataloader = create_flipped_dataloader(
+                self.dataloader,
+                flip_probability=1.0,
+                num_classes=self.num_classes  # FIX: Usa num_classes del nodo
+            )
+        else:
+            training_dataloader = self.dataloader
         
         # Metriche pre-training
         initial_loss, initial_acc = self._evaluate_model()
         
+        # Training
         trainer = self.trainer_class(
             model=self.model,
-            dataloader=self.dataloader,
+            dataloader=training_dataloader,
             criterion=torch.nn.CrossEntropyLoss(),
             args=self.train_args
         )
@@ -273,6 +298,7 @@ class DecentralizedNode:
             'final_loss': final_loss,
             'initial_accuracy': initial_acc,
             'final_accuracy': final_acc,
+            'is_byzantine': self.is_byzantine,
             'results': results
         }
         
@@ -342,6 +368,22 @@ class DecentralizedNode:
             'dataSize': self.data_size,
             'cost': max(1, int(base_cost * random.uniform(0.7, 1.3)))  # Garantisce cost >= 1
         }
+        
+    def configure_attack(self, attack_config, total_nodes):
+        """
+        Configura comportamento Byzantine per questo nodo
+        
+        Args:
+            attack_config: AttackConfig instance
+            total_nodes: numero totale di nodi
+        """
+        self.attack_config = attack_config
+        self.is_byzantine = attack_config.should_attack(self.node_id, total_nodes)
+        
+        if self.is_byzantine:
+            logger.warning(f"Node {self.node_id} configured as BYZANTINE")
+        else:
+            logger.debug(f"Node {self.node_id} configured as HONEST")
         
     def aggregate_models(self, other_nodes_models: List[Dict]) -> Dict:
         """

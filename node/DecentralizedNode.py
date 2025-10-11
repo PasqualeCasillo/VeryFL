@@ -41,11 +41,10 @@ class DecentralizedNode:
         
     async def upload_model_to_blockchain_and_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
         """
-        Upload del modello: Node → IPFS → Blockchain
-        Chiamato AUTONOMAMENTE dal nodo dopo l'elezione
+        Upload model: Node → IPFS → Blockchain
+        Returns True if successful, False otherwise
         """
         try:
-            # 1. Upload su IPFS
             logger.info(f"Node {self.node_id} uploading model to IPFS...")
             
             model_data = self.get_model_state_dict()
@@ -60,24 +59,23 @@ class DecentralizedNode:
             
             logger.info(f"Node {self.node_id} uploaded to IPFS: {ipfs_hash}")
             
-            # 2. Registra hash sulla blockchain
+            # Register hash on blockchain
             import brownie
             node_index = int(self.node_id)
             node_account = brownie.accounts[node_index]
             
-            # Ottieni il contratto dall'indirizzo
             contracts = brownie.project.chainServer
             auction_contract = contracts.AggregatorAuction.at(auction_address)
             
             tx = auction_contract.submitModelHash(ipfs_hash, {'from': node_account})
-            logger.info(f"Node {self.node_id} registered hash on blockchain: {tx.txid}")
+            tx.wait(1)  # Wait for 1 confirmation
+            
+            logger.info(f"Node {self.node_id} registered hash on blockchain (block {tx.block_number})")
             
             return True
             
         except Exception as e:
             logger.error(f"Node {self.node_id} upload failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return False
         
     async def aggregate_from_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
@@ -85,7 +83,7 @@ class DecentralizedNode:
         L'aggregatore scarica i modelli da IPFS usando gli hash dalla blockchain.
         NESSUN intermediario: Blockchain → IPFS → Aggregatore
         """
-        logger.warning(f"Node {self.node_id} (AGGREGATOR) starting aggregation from IPFS")
+        logger.info(f"Node {self.node_id} (AGGREGATOR) starting aggregation from IPFS")
         
         try:
             # 1. Leggi gli hash dalla blockchain
@@ -131,7 +129,7 @@ class DecentralizedNode:
                     model[key] for model in downloaded_models
                 ) / num_models
             
-            logger.warning(f" Node {self.node_id} completed aggregation from IPFS")
+            logger.info(f" Node {self.node_id} completed aggregation from IPFS")
             
             return aggregated_state
             

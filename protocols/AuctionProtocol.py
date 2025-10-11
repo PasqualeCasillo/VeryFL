@@ -175,30 +175,27 @@ class AuctionProtocol:
         return None
         
     async def _execute_fl_round(self, nodes, elected_aggregator, round_num):
-        """
-        Protocollo ridotto: coordina ma NON trasferisce dati in-memory
-        """
         import brownie
         from chainfl.ipfs_client import IPFSClient
-
+    
         ipfs_client = IPFSClient()
-
-        # 1. Assegna ruoli
+    
+        # 1. Assign roles
         aggregator_node = None
         for node in nodes:
             node_index = int(node.node_id)
             real_address = brownie.accounts[node_index].address
-
+    
             if real_address.lower() == elected_aggregator.lower():
                 node.set_role("aggregator", round_num)
                 aggregator_node = node
             else:
                 node.set_role("participant", round_num)
-
-        # 2. Training parallelo
+    
+        # 2. Parallel training
         await self._train_all_nodes(nodes)
-
-        # 3. Participants uploadano su IPFS
+    
+        # 3. Participants upload to IPFS
         logger.info("Participants uploading models to IPFS...")
         upload_tasks = []
         for node in nodes:
@@ -209,41 +206,53 @@ class AuctionProtocol:
                     self.current_auction_address
                 )
                 upload_tasks.append(asyncio.create_task(task))
-
+    
         results = await asyncio.gather(*upload_tasks)
-        logger.info(f"{sum(results)} participants uploaded")
-
-        # 4. Aggregatore scarica, aggrega e UPLOADA su IPFS
+        successful_uploads = sum(results)
+        logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded")
+    
+        # NUOVO: Verify upload completeness
+        all_uploaded, missing_nodes = self.blockchain.verify_all_models_uploaded(
+            self.current_auction_address
+        )
+        
+        if not all_uploaded:
+            logger.error(f"Upload verification failed: {len(missing_nodes)} nodes missing")
+            logger.error("Aborting round due to incomplete uploads")
+            return None
+        
+        logger.info("Upload verification passed: all models available")
+    
+        # 4. Aggregator downloads, aggregates and uploads to IPFS
         logger.info("Aggregator downloading, aggregating and uploading to IPFS...")
         aggregated_model = await aggregator_node.aggregate_from_ipfs(
             ipfs_client,
             self.blockchain,
             self.current_auction_address
         )
-
+    
         if not aggregated_model:
             logger.error("Aggregation failed")
             return None
-
-        # NUOVA PARTE: Aggregatore uploada modello globale su IPFS
+    
         global_ipfs_hash = await aggregator_node.upload_global_model_to_ipfs(
             ipfs_client,
             aggregated_model,
             self.current_auction_address
         )
-
+    
         if not global_ipfs_hash:
             logger.error("Global model upload to IPFS failed")
             return None
-
+    
         logger.info(f"Global model on IPFS: {global_ipfs_hash}")
-
-        # 5. DISTRIBUZIONE DECENTRALIZZATA (non più in-memory!)
+    
+        # 5. Decentralized distribution via IPFS
         await self._distribute_via_ipfs(nodes, ipfs_client)
-
+    
         return aggregated_model
-
-
+    
+    
     #    NUOVA FUNZIONE: Distribuzione decentralizzata
     async def _distribute_via_ipfs(self, nodes: List[DecentralizedNode], ipfs_client):
         """

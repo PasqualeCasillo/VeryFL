@@ -99,6 +99,44 @@ class AuctionChainProxy(chainProxy):
             if wrapped_contract.address == auction_address:
                 return wrapped_contract
         return None
+    
+    def verify_all_models_uploaded(self, auction_address):
+        """
+        Verify that all required nodes have uploaded their models.
+        Returns tuple (all_uploaded: bool, missing_nodes: list)
+        """
+        try:
+            wrapped_contract = self._find_contract_by_address(auction_address)
+            
+            if not wrapped_contract:
+                logger.error(f"Auction contract not found: {auction_address}")
+                return False, []
+            
+            if wrapped_contract.is_real:
+                # Real blockchain verification
+                missing = wrapped_contract.contract.getMissingUploads()
+                all_uploaded = len(missing) == 0
+                
+                if not all_uploaded:
+                    logger.warning(f"Missing uploads from {len(missing)} nodes")
+                    for addr in missing:
+                        logger.warning(f"  Node {addr[:10]}... has not uploaded")
+                
+                return all_uploaded, list(missing)
+            else:
+                # Mock verification
+                expected_uploads = len(wrapped_contract.contract['offers']) - 1
+                actual_uploads = len([
+                    h for h in wrapped_contract.contract.get('model_hashes', {}).values() 
+                    if h
+                ])
+                all_uploaded = actual_uploads >= expected_uploads
+                
+                return all_uploaded, []
+                
+        except Exception as e:
+            logger.error(f"Error verifying uploads: {e}")
+            return False, []
             
     def submit_offer(self, auction_address, node_address, computePower, 
                     bandwidth, reliability, dataSize, cost):

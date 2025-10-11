@@ -35,7 +35,7 @@ class BaseTrainer:
             logger.error("Model missing")
             raise Exception("Model missing")
         
-        logger.info(f"Constructing Optimizer {self.args['optimizer']}: lr {self.args['lr']}, weight_decay: {self.args['weight_decay']}")
+        logger.debug(f"Constructing Optimizer {self.args['optimizer']}: lr {self.args['lr']}, weight_decay: {self.args['weight_decay']}")
         if self.args['optimizer'] == "SGD":
             self.optimizer = torch.optim.SGD(
                 filter(lambda p: p.requires_grad, self.model.parameters()),

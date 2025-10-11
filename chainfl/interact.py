@@ -89,7 +89,7 @@ class chainProxy():
         if IPFSClient:
             try:
                 self.ipfs_client = IPFSClient()
-                logger.info("IPFS client initialized successfully")
+                logger.debug("IPFS client initialized successfully")
                 
                 # Test IPFS connection
                 test_data = b"VeryFL test connection"

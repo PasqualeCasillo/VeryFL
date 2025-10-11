@@ -26,7 +26,7 @@ class IPFSClient:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 self.client = ipfshttpclient.connect(ipfs_api)
-            logger.info("Connected to IPFS daemon")
+            logger.debug("Connected to IPFS daemon")
         except Exception as e:
             logger.error(f"Failed to connect to IPFS: {e}")
             self.client = None

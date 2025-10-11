@@ -30,6 +30,8 @@ contract AggregatorAuction {
     
     // Hash IPFS del modello globale aggregato (NUOVO)
     string public globalModelHash;
+
+    mapping(address => bool) public hasSubmittedModel;
     
     // ==================== OFFER STRUCTURE ====================
     
@@ -252,22 +254,47 @@ contract AggregatorAuction {
         inState(State.ModelsUploading)
     {
         require(msg.sender != aggregator, "Aggregator should not submit before aggregation");
-        require(bytes(modelHashes[msg.sender]).length == 0, "Model hash already submitted");
+        require(!hasSubmittedModel[msg.sender], "Model already submitted");
         require(bytes(ipfsHash).length > 0, "Empty IPFS hash");
-        
+
         modelHashes[msg.sender] = ipfsHash;
+        hasSubmittedModel[msg.sender] = true;
         modelsUploaded++;
-        
+
         emit ModelUploaded(msg.sender, ipfsHash, block.timestamp);
-        
-        // Notifica quando tutti i participant hanno uploadato
-        // (whitelist.length - 1 perché l'aggregatore non uploada prima dell'aggregazione)
+
         if (modelsUploaded >= whitelist.length - 1) {
             State oldState = auctionState;
             auctionState = State.Aggregating;
             emit StateChanged(oldState, State.Aggregating, block.timestamp);
             emit AllModelsReady(modelsUploaded, roundNumber);
         }
+    }
+
+    function getMissingUploads() external view returns (address[] memory) {
+        uint256 missingCount = 0;
+
+        // Count missing uploads
+        for (uint256 i = 0; i < whitelist.length; i++) {
+            address node = whitelist[i];
+            if (node != aggregator && !hasSubmittedModel[node]) {
+                missingCount++;
+            }
+        }
+
+        // Build array of missing nodes
+        address[] memory missing = new address[](missingCount);
+        uint256 index = 0;
+
+        for (uint256 i = 0; i < whitelist.length; i++) {
+            address node = whitelist[i];
+            if (node != aggregator && !hasSubmittedModel[node]) {
+                missing[index] = node;
+                index++;
+            }
+        }
+
+        return missing;
     }
     
     /**
@@ -388,8 +415,11 @@ contract AggregatorAuction {
         uint256 uploadedModels,
         uint256 whitelistSize,
         bool hasGlobalModel,
-        string memory globalModel
+        string memory globalModel,
+        bool allModelsUploaded
     ) {
+        bool allUploaded = (modelsUploaded >= whitelist.length - 1);
+        
         return (
             auctionState,
             aggregator,
@@ -398,7 +428,8 @@ contract AggregatorAuction {
             modelsUploaded,
             whitelist.length,
             bytes(globalModelHash).length > 0,
-            globalModelHash
+            globalModelHash,
+            allUploaded
         );
     }
     

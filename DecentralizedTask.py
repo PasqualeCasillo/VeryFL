@@ -26,13 +26,7 @@ class DecentralizedTask(Task):
             byzantine_ratio=global_args.get('byzantine_ratio', 0.0),
             attack_start_round=global_args.get('attack_start_round', 0)
         )
-        
-        self.auction_protocol = AuctionProtocol(
-            blockchain_proxy=auction_chain_proxy,
-            timeout_seconds=global_args.get('auction_timeout', 300),
-            aggregation_method=aggregation_method
-        )
-        
+
         self.auction_protocol = AuctionProtocol(
             blockchain_proxy=auction_chain_proxy,
             timeout_seconds=global_args.get('auction_timeout', 300),

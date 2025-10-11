@@ -10,11 +10,19 @@ class MetricsCalculator:
         all_preds = []
         all_labels = []
         all_probs = []
+        total_loss = 0.0  # ← NUOVO
+        num_samples = 0   # ← NUOVO
         
         with torch.no_grad():
             for data, labels in dataloader:
                 data, labels = data.to(device), labels.to(device)
                 outputs = model(data)
+                
+                # ← NUOVO: Calcola loss
+                loss = torch.nn.functional.cross_entropy(outputs, labels, reduction='sum')
+                total_loss += loss.item()
+                num_samples += labels.size(0)
+                
                 probs = torch.softmax(outputs, dim=1)
                 _, preds = torch.max(outputs, 1)
                 
@@ -31,14 +39,12 @@ class MetricsCalculator:
             all_labels, all_preds, average='weighted', zero_division=0
         )
         
-        # FIX AUC per classificazione binaria
+        # AUC calculation
         try:
             n_classes = all_probs.shape[1]
             if n_classes == 2:
-                # Per classificazione binaria, usa solo la probabilità della classe positiva
                 auc = roc_auc_score(all_labels, all_probs[:, 1])
             else:
-                # Per multi-classe, usa OvR
                 auc = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='weighted')
         except Exception as e:
             print(f"Warning: AUC calculation failed: {e}")
@@ -49,5 +55,6 @@ class MetricsCalculator:
             'precision': float(precision),
             'recall': float(recall),
             'f1': float(f1),
-            'auc': float(auc)
+            'auc': float(auc),
+            'loss': float(total_loss / num_samples)  # ← NUOVO
         }

@@ -95,7 +95,9 @@ class DecentralizedTask(Task):
                     # Per-node metrics
                     node_metrics = {}
                     for node in self.nodes:
-                        test_loader = self.test_dataloader
+                        # test_loader = self.test_dataloader
+                        test_loader = node.dataloader
+                        
                         
                         node_metrics[node.node_id] = self.metrics_calculator.calculate_all_metrics(
                             node.model,

@@ -83,12 +83,22 @@ class DecentralizedNode:
             logger.error(f"Node {self.node_id} upload failed: {e}")
             return False
         
-    async def aggregate_from_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
+    async def aggregate_from_ipfs(self, ipfs_client, blockchain_proxy, auction_address, aggregation_method='fedavg'):
         """
-        L'aggregatore scarica i modelli da IPFS usando gli hash dalla blockchain.
-        NESSUN intermediario: Blockchain → IPFS → Aggregatore
+        L'aggregatore scarica i modelli da IPFS usando gli hash dalla blockchain
+        e li aggrega usando il metodo specificato.
+        
+        Args:
+            ipfs_client: Client IPFS
+            blockchain_proxy: Proxy blockchain
+            auction_address: Indirizzo contratto auction
+            aggregation_method: 'fedavg', 'krum', or 'median'
+        
+        Returns:
+            Aggregated state_dict
         """
         logger.info(f"Node {self.node_id} (AGGREGATOR) starting aggregation from IPFS")
+        logger.info(f"Aggregation method: {aggregation_method.upper()}")
         
         try:
             # 1. Leggi gli hash dalla blockchain
@@ -125,16 +135,40 @@ class DecentralizedNode:
             
             logger.info(f"Aggregator downloaded {len(downloaded_models)} models")
             
-            # 3. Aggrega (FedAvg)
-            aggregated_state = {}
-            num_models = len(downloaded_models)
+            #  3. NUOVO: Aggrega usando metodo configurabile
+            if aggregation_method.lower() == 'krum':
+                logger.info("=" * 60)
+                logger.info("USING KRUM AGGREGATION")
+                logger.info("=" * 60)
+                
+                from server.aggregation_alg.krum import krumAggregator
+                
+                # Configura Krum con byzantine_ratio
+                # Puoi passare questo come parametro se necessario
+                aggregator = krumAggregator(byzantine_ratio=0.3)
+                aggregated_state = aggregator._aggregate_alg(downloaded_models)
+                
+                logger.info(" Krum aggregation complete")
+                
+            elif aggregation_method.lower() == 'median':
+                logger.info("Using MEDIAN aggregation")
+                
+                from server.aggregation_alg.median import medianAggregator
+                aggregator = medianAggregator()
+                aggregated_state = aggregator._aggregate_alg(downloaded_models)
+                
+            else:  # Default: FedAvg
+                logger.info("Using FEDAVG aggregation")
+                
+                aggregated_state = {}
+                num_models = len(downloaded_models)
+                
+                for key in downloaded_models[0].keys():
+                    aggregated_state[key] = sum(
+                        model[key] for model in downloaded_models
+                    ) / num_models
             
-            for key in downloaded_models[0].keys():
-                aggregated_state[key] = sum(
-                    model[key] for model in downloaded_models
-                ) / num_models
-            
-            logger.info(f" Node {self.node_id} completed aggregation from IPFS")
+            logger.info(f"Node {self.node_id} completed aggregation from IPFS")
             
             return aggregated_state
             
@@ -385,33 +419,52 @@ class DecentralizedNode:
         else:
             logger.debug(f"Node {self.node_id} configured as HONEST")
         
-    def aggregate_models(self, other_nodes_models: List[Dict]) -> Dict:
+    def aggregate_models(self, other_nodes_models: List[Dict], method='fedavg') -> Dict:
         """
-        Perform FedAvg aggregation on received models.
-        This method is called ONLY if this node is the elected aggregator.
-
+        Perform aggregation with configurable method.
+        
         Args:
             other_nodes_models: List of state_dicts from other nodes
-
+            method: 'fedavg', 'krum', or 'median'
+            
         Returns:
             Aggregated state_dict (global model)
         """
-        logger.info(f"Node {self.node_id} executing aggregation (elected aggregator)")
-
-        logger.warning(f"NODE {self.node_id} IS PERFORMING AGGREGATION")
-        logger.warning(f"Role: {self.role}")
-        logger.warning(f"Models received: {len(other_nodes_models)}")
-        # Include own model in aggregation
+        logger.info(f"Node {self.node_id} executing {method.upper()} aggregation")
+        
+        # Include own model
         all_models = other_nodes_models + [self.get_model_state_dict()]
         num_models = len(all_models)
-
+        
         logger.info(f"Aggregating {num_models} models (including own)")
-
-        # FedAvg: simple averaging
-        aggregated_state = {}
-        for key in all_models[0].keys():
-            # Sum all model parameters
-            aggregated_state[key] = sum(model[key] for model in all_models) / num_models
-
-        logger.info(f"Aggregation complete - {len(aggregated_state)} parameters updated")
+        
+        # Scegli metodo di aggregazione
+        if method.lower() == 'krum':
+            from server.aggregation_alg.krum import krumAggregator
+            
+            # Calcola byzantine_ratio dai modelli disponibili
+            # Assumi che ~25% siano Byzantine (configurable)
+            aggregator = krumAggregator(byzantine_ratio=0.25)
+            aggregated_state = aggregator._aggregate_alg(all_models)
+            
+            logger.info(" Krum aggregation complete")
+            
+        elif method.lower() == 'median':
+            from server.aggregation_alg.median import medianAggregator
+            
+            aggregator = medianAggregator()
+            aggregated_state = aggregator._aggregate_alg(all_models)
+            
+            logger.info(" Median aggregation complete")
+            
+        else:  # Default: FedAvg
+            aggregated_state = {}
+            
+            for key in all_models[0].keys():
+                # Simple averaging
+                aggregated_state[key] = sum(model[key] for model in all_models) / num_models
+            
+            logger.info(" FedAvg aggregation complete")
+        
+        logger.info(f"Aggregated {len(aggregated_state)} parameters")
         return aggregated_state

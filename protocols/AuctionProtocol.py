@@ -4,6 +4,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 
 from networkx import nodes
+import torch
 from node.DecentralizedNode import DecentralizedNode
 
 from server.aggregation_alg.krum import krumAggregator
@@ -212,7 +213,7 @@ class AuctionProtocol:
         successful_uploads = sum(results)
         logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded")
     
-        # NUOVO: Verify upload completeness
+        # Verify upload completeness
         all_uploaded, missing_nodes = self.blockchain.verify_all_models_uploaded(
             self.current_auction_address
         )
@@ -224,12 +225,15 @@ class AuctionProtocol:
         
         logger.info("Upload verification passed: all models available")
     
-        # 4. Aggregator downloads, aggregates and uploads to IPFS
+        #  4. MODIFICATO: Aggregator downloads, aggregates with METHOD and uploads to IPFS
         logger.info("Aggregator downloading, aggregating and uploading to IPFS...")
+        logger.info(f"Using aggregation method: {self.aggregation_method.upper()}")  # ← Log metodo
+        
         aggregated_model = await aggregator_node.aggregate_from_ipfs(
             ipfs_client,
             self.blockchain,
-            self.current_auction_address
+            self.current_auction_address,
+            aggregation_method=self.aggregation_method  # ←  PASSA IL METODO
         )
     
         if not aggregated_model:
@@ -338,47 +342,90 @@ class AuctionProtocol:
             return False
     
             
-    async def _perform_aggregation(self, nodes: List[DecentralizedNode], 
-                                     aggregator_address: str) -> Optional[Dict]:
+    async def _perform_aggregation(self, nodes, aggregator_address):
         """
         Delegate aggregation to the elected aggregator node.
-        The aggregator collects models and computes FedAvg.
+        The aggregator collects models and computes aggregation using configured method.
         """
         try:
             import brownie
-            
+
             # Find the aggregator node
             aggregator_node = None
             participant_nodes = []
-            
+
             for node in nodes:
                 node_index = int(node.node_id)
                 real_address = brownie.accounts[node_index].address
-                
+
                 if real_address.lower() == aggregator_address.lower():
                     aggregator_node = node
                 else:
                     participant_nodes.append(node)
-            
+
             if not aggregator_node:
                 logger.error("Aggregator node not found")
                 return None
-            
+
             logger.info(f"Aggregator: Node {aggregator_node.node_id}")
             logger.info(f"Participants: {len(participant_nodes)} nodes")
-            
+            logger.info(f"Aggregation method: {self.aggregation_method.upper()}")  # ← NUOVO LOG
+
             # Collect participant models (in-memory, no IPFS needed)
             participant_models = [
                 node.get_model_state_dict() 
                 for node in participant_nodes
             ]
+
+            # KEY CHANGE: Passa il metodo di aggregazione
+            aggregated_state = aggregator_node.aggregate_models(
+                participant_models,
+                method=self.aggregation_method  # ← AGGIUNGI QUESTO
+            )
             
-            # KEY CHANGE: Aggregator performs the computation
-            aggregated_state = aggregator_node.aggregate_models(participant_models)
-            
-            logger.info(f"Aggregation completed by node {aggregator_node.node_id}")
+                        # AGGIUNGI ANALISI POST-AGGREGAZIONE
+            if self.aggregation_method == 'krum':
+                logger.info("=" * 60)
+                logger.info("POST-AGGREGATION ANALYSIS")
+                logger.info("=" * 60)
+                
+                # Flatten aggregato
+                agg_flat = torch.cat([
+                    aggregated_state[k].flatten() 
+                    for k in sorted(aggregated_state.keys())
+                ])
+                
+                # Calcola distanza aggregato da ogni modello originale
+                all_models = participant_models + [aggregator_node.get_model_state_dict()]
+                
+                distances_from_agg = []
+                for i, model in enumerate(all_models):
+                    model_flat = torch.cat([model[k].flatten() for k in sorted(model.keys())])
+                    dist = torch.norm(agg_flat - model_flat, p=2)
+                    distances_from_agg.append(dist.item())
+                    
+                    # Identifica se nodo è Byzantine
+                    node = nodes[i]
+                    byz_marker = " [BYZANTINE]" if node.is_byzantine else " [HONEST]"
+                    
+                    logger.info(f"  Distance aggregated → node {i}{byz_marker}: {dist:.2e}")
+                
+                # Trova modello più vicino all'aggregato
+                closest_idx = np.argmin(distances_from_agg)
+                closest_node = nodes[closest_idx]
+                
+                logger.info(f"Aggregated model closest to: Node {closest_idx}")
+                
+                if closest_node.is_byzantine:
+                    logger.error(f"✗ WARNING: Aggregated model is closest to a BYZANTINE node!")
+                else:
+                    logger.info(f" Aggregated model is closest to an HONEST node")
+                
+                logger.info("=" * 60)
+
+            logger.info(f"{self.aggregation_method.upper()} aggregation completed by node {aggregator_node.node_id}")
             return aggregated_state
-            
+
         except Exception as e:
             logger.error(f"Error in aggregation: {e}")
             import traceback

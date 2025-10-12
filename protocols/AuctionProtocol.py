@@ -176,27 +176,35 @@ class AuctionProtocol:
         logger.error(f"Election timeout after {max_wait_time}s")
         return None
         
+# protocols/AuctionProtocol.py
+
     async def _execute_fl_round(self, nodes, elected_aggregator, round_num):
         import brownie
         from chainfl.ipfs_client import IPFSClient
-    
+        import traceback
+
         ipfs_client = IPFSClient()
-    
+
         # 1. Assign roles
         aggregator_node = None
         for node in nodes:
             node_index = int(node.node_id)
             real_address = brownie.accounts[node_index].address
-    
+
             if real_address.lower() == elected_aggregator.lower():
                 node.set_role("aggregator", round_num)
                 aggregator_node = node
             else:
                 node.set_role("participant", round_num)
-    
+
+        if not aggregator_node:
+            logger.error("Aggregator node not found in node list")
+            return None
+
         # 2. Parallel training
+        logger.info("Starting parallel training for all nodes...")
         await self._train_all_nodes(nodes)
-    
+
         # 3. Participants upload to IPFS
         logger.info("Participants uploading models to IPFS...")
         upload_tasks = []
@@ -208,56 +216,128 @@ class AuctionProtocol:
                     self.current_auction_address
                 )
                 upload_tasks.append(asyncio.create_task(task))
-    
+
         results = await asyncio.gather(*upload_tasks)
         successful_uploads = sum(results)
-        logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded")
-    
-        # Verify upload completeness
+        logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded successfully")
+
+        # 4. Verify upload completeness
         all_uploaded, missing_nodes = self.blockchain.verify_all_models_uploaded(
             self.current_auction_address
         )
-        
+
         if not all_uploaded:
             logger.error(f"Upload verification failed: {len(missing_nodes)} nodes missing")
-            logger.error("Aborting round due to incomplete uploads")
+            logger.error(f"Missing node addresses: {missing_nodes}")
+
+            # Check if aggregation method can proceed with reduced nodes
+            remaining_nodes = len(nodes) - len(missing_nodes)
+
+            if self.aggregation_method == 'krum':
+                # Calculate if Krum constraint still satisfied
+                f = int(remaining_nodes * self.attack_config.byzantine_ratio)
+                required = 2 * f + 3
+
+                logger.error("=" * 60)
+                logger.error("KRUM CONSTRAINT CHECK WITH MISSING UPLOADS")
+                logger.error("=" * 60)
+                logger.error(f"Byzantine ratio: {self.attack_config.byzantine_ratio}")
+                logger.error(f"Remaining nodes: {remaining_nodes}")
+                logger.error(f"Assumed Byzantine (f): {f}")
+                logger.error(f"Required nodes for Krum: {required}")
+                logger.error(f"Constraint satisfied: {remaining_nodes >= required}")
+                logger.error("=" * 60)
+
+                if remaining_nodes < required:
+                    logger.error(
+                        f"ABORTING ROUND: Krum constraint violated "
+                        f"(available: {remaining_nodes}, required: {required})"
+                    )
+                    logger.error("System cannot guarantee Byzantine-fault-tolerance with current node set")
+                    return None
+                else:
+                    logger.warning(
+                        f"Continuing with reduced node set "
+                        f"({remaining_nodes} nodes available, threshold: {required})"
+                    )
+                    logger.warning("Note: This reduces safety margin against Byzantine attacks")
+            else:
+                # For non-Krum methods, abort on any missing uploads
+                logger.error("Aborting round due to incomplete uploads")
+                return None
+
+        logger.info("Upload verification passed: all required models available")
+
+        # 5. Aggregator downloads, aggregates and uploads to IPFS
+        logger.info("=" * 60)
+        logger.info("STARTING AGGREGATION PHASE")
+        logger.info("=" * 60)
+        logger.info(f"Aggregation method: {self.aggregation_method.upper()}")
+        logger.info(f"Aggregator node: {aggregator_node.node_id}")
+
+        try:
+            aggregated_model = await aggregator_node.aggregate_from_ipfs(
+                ipfs_client,
+                self.blockchain,
+                self.current_auction_address,
+                aggregation_method=self.aggregation_method
+            )
+
+            if not aggregated_model:
+                logger.error("Aggregation returned None - operation failed")
+                return None
+
+            logger.info("Aggregation completed successfully")
+
+        except ValueError as e:
+            # Krum constraint violation or validation error
+            logger.error("=" * 60)
+            logger.error("AGGREGATION FAILED: CONSTRAINT VIOLATION")
+            logger.error("=" * 60)
+            logger.error(f"Error: {str(e)}")
+            logger.error("=" * 60)
+            logger.error("Aborting round due to aggregation failure")
             return None
-        
-        logger.info("Upload verification passed: all models available")
-    
-        #  4. MODIFICATO: Aggregator downloads, aggregates with METHOD and uploads to IPFS
-        logger.info("Aggregator downloading, aggregating and uploading to IPFS...")
-        logger.info(f"Using aggregation method: {self.aggregation_method.upper()}")  # ← Log metodo
-        
-        aggregated_model = await aggregator_node.aggregate_from_ipfs(
-            ipfs_client,
-            self.blockchain,
-            self.current_auction_address,
-            aggregation_method=self.aggregation_method  # ←  PASSA IL METODO
-        )
-    
-        if not aggregated_model:
-            logger.error("Aggregation failed")
+
+        except Exception as e:
+            logger.error("=" * 60)
+            logger.error("AGGREGATION FAILED: UNEXPECTED ERROR")
+            logger.error("=" * 60)
+            logger.error(f"Error type: {type(e).__name__}")
+            logger.error(f"Error message: {str(e)}")
+            logger.error("Stack trace:")
+            logger.error(traceback.format_exc())
+            logger.error("=" * 60)
             return None
-    
+
+        # 6. Upload global model to IPFS
+        logger.info("Uploading global aggregated model to IPFS...")
         global_ipfs_hash = await aggregator_node.upload_global_model_to_ipfs(
             ipfs_client,
             aggregated_model,
             self.current_auction_address
         )
-    
+
         if not global_ipfs_hash:
             logger.error("Global model upload to IPFS failed")
             return None
-    
-        logger.info(f"Global model on IPFS: {global_ipfs_hash}")
-    
-        # 5. Decentralized distribution via IPFS
-        await self._distribute_via_ipfs(nodes, ipfs_client)
-    
+
+        logger.info(f"Global model uploaded to IPFS: {global_ipfs_hash}")
+
+        # 7. Decentralized distribution via IPFS
+        logger.info("Initiating decentralized model distribution...")
+        distribution_success = await self._distribute_via_ipfs(nodes, ipfs_client)
+
+        if not distribution_success:
+            logger.warning("Some nodes failed to download global model")
+            # Continue anyway - not critical for round completion
+
+        logger.info("=" * 60)
+        logger.info("FL ROUND COMPLETED SUCCESSFULLY")
+        logger.info("=" * 60)
+
         return aggregated_model
-    
-    
+
     #    NUOVA FUNZIONE: Distribuzione decentralizzata
     async def _distribute_via_ipfs(self, nodes: List[DecentralizedNode], ipfs_client):
         """
@@ -411,6 +491,7 @@ class AuctionProtocol:
                     logger.info(f"  Distance aggregated → node {i}{byz_marker}: {dist:.2e}")
                 
                 # Trova modello più vicino all'aggregato
+                import numpy as np
                 closest_idx = np.argmin(distances_from_agg)
                 closest_node = nodes[closest_idx]
                 

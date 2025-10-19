@@ -214,13 +214,13 @@ class DecentralizedPowerGridAttack(BenchMark):
             'alpha': 0.5,
             'mode': 'decentralized',
             'auction_timeout': 180,
-            'aggregation_method': 'fedavg',
+            'aggregation_method': 'krum',
             'input_dim': 128,
             
             # NUOVO: Configurazione attacco
             'attack_type': 'label_flipping',
-            'byzantine_ratio': 0.4,  # 40% nodi Byzantine (2/5)
-            'attack_start_round': 50,
+            'byzantine_ratio': 0.25,  # 25% nodi Byzantine (2/8)
+            'attack_start_round': 70,
         }
         self.train_args = {
             'optimizer': 'Adam',
@@ -229,6 +229,42 @@ class DecentralizedPowerGridAttack(BenchMark):
             'weight_decay': 1e-4,
             'num_steps': 4
         }
+        self.algorithm = FedAvg()
+
+class DecentralizedPowerGridCrypto(BenchMark):
+    """
+    Benchmark PowerGrid decentralizzato con encryption
+    """
+    def __init__(self):
+        super(DecentralizedPowerGridCrypto, self).__init__('DecentralizedPowerGridCrypto')
+        self.global_args = {
+            'client_num': 7,
+            'model': 'PowerGridMLP',
+            'dataset': 'PowerGrid',
+            'batch_size': 64,
+            'class_num': 2,
+            'data_folder': './data',
+            'communication_round': 100,
+            'non-iid': False,
+            'alpha': 0.5,
+            'mode': 'decentralized',
+            'auction_timeout': 180,
+            'aggregation_method': 'fedavg',
+            'input_dim': 128,
+            
+            # NUOVO: Configurazione encryption
+            'enable_encryption': True,
+            'results_dir': 'results/crypto_test'
+        }
+        
+        self.train_args = {
+            'optimizer': 'Adam',
+            'device': 'cpu',
+            'lr': 1e-3,
+            'weight_decay': 1e-4,
+            'num_steps': 2
+        }
+        
         self.algorithm = FedAvg()
 
 def get_benchmark(args: str) -> BenchMark:
@@ -246,6 +282,8 @@ def get_benchmark(args: str) -> BenchMark:
         return DecentralizedPowerGrid()
     elif args == "DecentralizedPowerGridAttack": # NUOVO con attacco
         return DecentralizedPowerGridAttack()
+    elif args == "DecentralizedPowerGridCrypto":  # NUOVO
+        return DecentralizedPowerGridCrypto()
     else:
         logger.error(f"Unknown Benchmark {args}")
         raise Exception(f"Unknown Benchmark {args}")

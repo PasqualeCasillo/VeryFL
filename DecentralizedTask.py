@@ -20,7 +20,7 @@ class DecentralizedTask(Task):
         
         aggregation_method = global_args.get('aggregation_method', 'fedavg')
         
-        # NUOVO: Configurazione attacco
+        # Configurazione attacco
         self.attack_config = AttackConfig(
             attack_type=global_args.get('attack_type', 'none'),
             byzantine_ratio=global_args.get('byzantine_ratio', 0.0),
@@ -34,11 +34,19 @@ class DecentralizedTask(Task):
             attack_config=self.attack_config
         )
         
+        # NUOVO: Configurazione encryption
+        self.encryption_enabled = global_args.get('enable_encryption', False)
+        if self.encryption_enabled:
+            logger.info("=" * 60)
+            logger.info("ENCRYPTION ENABLED")
+            logger.info("Models will be encrypted with AES-256-GCM")
+            logger.info("Group signatures enabled for authentication")
+            logger.info("=" * 60)
+        
         # Usa save_dir unico per tutti i file
         save_dir = global_args.get('results_dir', 'results')
         self.metrics_logger = MetricsLogger(save_dir=save_dir)
-        self.plotter = MetricsPlotter(save_dir=f'{save_dir}/plots')
-        
+        self.plotter = MetricsPlotter(save_dir=f'{save_dir}/plots')    
     def _construct_nodes(self):
         logger.info(f"Constructing {len(self.client_list)} decentralized nodes")
         

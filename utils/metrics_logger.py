@@ -25,7 +25,7 @@ class MetricsLogger:
         }
     
     def log_round(self, round_num, global_metrics, node_metrics, loss, 
-                  byzantine_nodes=None, attack_active=False):
+                  byzantine_nodes=None, attack_active=False, pre_aggregation_metrics=None):
         """
         Aggiungi parametri per tracking attacco
         

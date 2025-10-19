@@ -8,8 +8,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from client.base.baseTrainer import BaseTrainer
 from utils.attack_utils import create_flipped_dataloader
-from chainfl.ipfs_client import IPFSClient
-from typing import List, Tuple, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,38 +46,23 @@ class DecentralizedNode:
         
     async def upload_model_to_blockchain_and_ipfs(self, ipfs_client, blockchain_proxy, auction_address):
         """
-        Upload model: Node → IPFS (encrypted) → Blockchain
-        VERSIONE CON ENCRYPTION E GROUP SIGNATURE
-        
-        Returns:
-            True if successful, False otherwise
+        Upload model: Node → IPFS → Blockchain
+        Returns True if successful, False otherwise
         """
         try:
-            logger.info(f"Node {self.node_id} uploading encrypted model to IPFS...")
+            logger.info(f"Node {self.node_id} uploading model to IPFS...")
             
             model_data = self.get_model_state_dict()
-            metadata = {
+            ipfs_hash = ipfs_client.upload_model(model_data, metadata={
                 'node_id': self.node_id,
-                'round': self.current_round,
-                'role': self.role
-            }
+                'round': self.current_round
+            })
             
-            # Upload con encryption e firma gruppo
-            cid_manifest, key_data = ipfs_client.upload_model_secured(
-                model_data,
-                metadata,
-                self.bbs_secret_key
-            )
-            
-            if not cid_manifest:
+            if not ipfs_hash:
                 logger.error(f"Node {self.node_id} failed IPFS upload")
                 return False
             
-            logger.info(f"Node {self.node_id} uploaded to IPFS: {cid_manifest}")
-            
-            # Store encryption key locally
-            if key_data and 'Kc' in key_data:
-                self.store_encryption_key(cid_manifest, key_data['Kc'])
+            logger.info(f"Node {self.node_id} uploaded to IPFS: {ipfs_hash}")
             
             # Register hash on blockchain
             import brownie
@@ -89,8 +72,8 @@ class DecentralizedNode:
             contracts = brownie.project.chainServer
             auction_contract = contracts.AggregatorAuction.at(auction_address)
             
-            tx = auction_contract.submitModelHash(cid_manifest, {'from': node_account})
-            tx.wait(1)
+            tx = auction_contract.submitModelHash(ipfs_hash, {'from': node_account})
+            tx.wait(1)  # Wait for 1 confirmation
             
             logger.info(f"Node {self.node_id} registered hash on blockchain (block {tx.block_number})")
             
@@ -104,10 +87,9 @@ class DecentralizedNode:
         """
         L'aggregatore scarica i modelli da IPFS usando gli hash dalla blockchain
         e li aggrega usando il metodo specificato.
-        VERSIONE CON VERIFICA CRITTOGRAFICA
         
         Args:
-            ipfs_client: Client IPFS con encryption abilitata
+            ipfs_client: Client IPFS
             blockchain_proxy: Proxy blockchain
             auction_address: Indirizzo contratto auction
             aggregation_method: 'fedavg', 'krum', or 'median'
@@ -127,62 +109,36 @@ class DecentralizedNode:
             ipfs_hashes = auction_contract.getAllModelHashes()
             logger.info(f"Aggregator found {len(ipfs_hashes)} model hashes on blockchain")
             
-            # 2. Scarica i modelli da IPFS con verifica crittografica
+            # 2. Scarica i modelli da IPFS
             downloaded_models = []
             
             for idx, ipfs_hash in enumerate(ipfs_hashes):
-                if not ipfs_hash:
+                if not ipfs_hash:  # Skip vuoti
                     continue
                 
                 # Filtra il proprio modello (opzionale)
-                node_index = int(self.node_id)
+                node_index = int(aggregator_node.node_id)
                 if idx == node_index:
                     # Usa il proprio modello già in memoria
                     downloaded_models.append(self.get_model_state_dict())
                     logger.info(f"Using own model for aggregation")
                 else:
-                    # Scarica dagli altri nodi CON VERIFICA
-                    logger.info(f"Downloading encrypted model from IPFS: {ipfs_hash[:10]}...")
+                    # Scarica dagli altri nodi
+                    logger.info(f"Downloading model from IPFS: {ipfs_hash[:10]}...")
+                    model_data = ipfs_client.download_model(ipfs_hash)
                     
-                    # NUOVO: Recupera chiave di cifratura dal nodo sorgente
-                    # In un sistema reale, questo richiederebbe un KRS o key distribution protocol
-                    # Per il PoC, assumiamo che l'aggregatore abbia accesso alle chiavi
-                    
-                    # Opzione 1: Chiave condivisa tra nodi (semplificazione PoC)
-                    # Opzione 2: Key Release Service
-                    # Opzione 3: Chiavi in smart contract cifrate
-                    
-                    # Per ora, proviamo a scaricare e verificare la firma
-                    # Se il modello è cifrato, serve la chiave Kc
-                    
-                    try:
-                        # Tentativo 1: Scarica come modello sicuro con verifica firma
-                        # Nota: serve Kc per decifrare. Per il PoC, lo recuperiamo da una fonte trusted
-                        
-                        # WORKAROUND PoC: Cerca chiave in memoria del nodo locale
-                        # In produzione, useremmo un KRS con challenge-response
-                        Kc = self._get_encryption_key_for_manifest(ipfs_hash)
-                        
-                        if Kc:
-                            model_data = ipfs_client.download_model_secured(ipfs_hash, Kc)
-                        else:
-                            # Fallback: prova download senza encryption (legacy)
-                            logger.warning(f"No encryption key for {ipfs_hash}, trying legacy download")
-                            model_data = ipfs_client.download_model(ipfs_hash)
-                        
-                        if model_data:
-                            downloaded_models.append(model_data)
-                            logger.info(f"Downloaded and verified model {idx+1}")
-                        else:
-                            logger.warning(f"Failed to download model {idx+1}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error downloading model {idx+1}: {e}")
-                        continue
+                    if model_data:
+                        downloaded_models.append(model_data)
+                        logger.info(f"Downloaded model {idx+1}")
+                    else:
+                        logger.warning(f"Failed to download model {idx+1}")
             
-            logger.info(f"Aggregator downloaded {len(downloaded_models)} models")
+            logger.info(
+                f"Aggregator downloaded {len(downloaded_models)} models "
+                f"(own model + {len(downloaded_models)-1} from IPFS)"
+            )
             
-            # 3. Aggrega usando metodo configurabile
+            #  3. NUOVO: Aggrega usando metodo configurabile
             if aggregation_method.lower() == 'krum':
                 logger.info("=" * 60)
                 logger.info("USING KRUM AGGREGATION")
@@ -190,10 +146,12 @@ class DecentralizedNode:
                 
                 from server.aggregation_alg.krum import krumAggregator
                 
+                # Configura Krum con byzantine_ratio
+                # Puoi passare questo come parametro se necessario
                 aggregator = krumAggregator(byzantine_ratio=0.3)
                 aggregated_state = aggregator._aggregate_alg(downloaded_models)
                 
-                logger.info("Krum aggregation complete")
+                logger.info(" Krum aggregation complete")
                 
             elif aggregation_method.lower() == 'median':
                 logger.info("Using MEDIAN aggregation")
@@ -202,7 +160,7 @@ class DecentralizedNode:
                 aggregator = medianAggregator()
                 aggregated_state = aggregator._aggregate_alg(downloaded_models)
                 
-            else:
+            else:  # Default: FedAvg
                 logger.info("Using FEDAVG aggregation")
                 
                 aggregated_state = {}
@@ -221,40 +179,30 @@ class DecentralizedNode:
             logger.error(f"Aggregator IPFS aggregation failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return None  
+            return None    
     
     async def upload_global_model_to_ipfs(self, ipfs_client, aggregated_model, auction_address):
         """
         L'AGGREGATORE uploada il modello globale su IPFS e registra l'hash sulla blockchain.
-        VERSIONE CON ENCRYPTION E GROUP SIGNATURE
+        Chiamato SOLO dal nodo aggregatore dopo l'aggregazione.
         """
         try:
             logger.info(f"Aggregator {self.node_id} uploading GLOBAL model to IPFS...")
 
-            metadata = {
+            # 1. Upload su IPFS
+            ipfs_hash = ipfs_client.upload_model(aggregated_model, metadata={
                 'type': 'global_aggregated',
                 'round': self.current_round,
                 'aggregator': self.node_id
-            }
+            })
 
-            # Upload con encryption e firma gruppo
-            cid_manifest, key_data = ipfs_client.upload_model_secured(
-                aggregated_model,
-                metadata,
-                self.bbs_secret_key
-            )
-
-            if not cid_manifest:
-                logger.error(f"Aggregator failed IPFS upload")
+            if not ipfs_hash:
+                logger.error(f" Aggregator failed IPFS upload")
                 return None
 
-            logger.info(f"Global model uploaded to IPFS: {cid_manifest}")
+            logger.info(f" Global model uploaded to IPFS: {ipfs_hash}")
 
-            # Store encryption key
-            if key_data and 'Kc' in key_data:
-                self.store_encryption_key(cid_manifest, key_data['Kc'])
-
-            # Registra hash sulla blockchain
+            # 2. Registra hash sulla blockchain
             import brownie
             node_index = int(self.node_id)
             aggregator_account = brownie.accounts[node_index]
@@ -262,10 +210,11 @@ class DecentralizedNode:
             contracts = brownie.project.chainServer
             auction_contract = contracts.AggregatorAuction.at(auction_address)
 
-            tx = auction_contract.submitGlobalModel(cid_manifest, {'from': aggregator_account})
+            # CHIAMA submitGlobalModel() del contratto
+            tx = auction_contract.submitGlobalModel(ipfs_hash, {'from': aggregator_account})
             logger.info(f"Global hash registered on blockchain: {tx.txid}")
 
-            return cid_manifest
+            return ipfs_hash
 
         except Exception as e:
             logger.error(f"Aggregator upload failed: {e}")
@@ -277,7 +226,6 @@ class DecentralizedNode:
         """
         Ogni nodo AUTONOMAMENTE scarica il modello globale da IPFS.
         Legge l'hash dalla blockchain e scarica da IPFS.
-        VERSIONE CON DECRYPTION E VERIFICA
         """
         try:
             logger.info(f"Node {self.node_id} downloading GLOBAL model from IPFS...")
@@ -287,6 +235,7 @@ class DecentralizedNode:
             contracts = brownie.project.chainServer
             auction_contract = contracts.AggregatorAuction.at(auction_address)
 
+            # CHIAMA getGlobalModelHash() del contratto
             global_ipfs_hash = auction_contract.getGlobalModelHash()
 
             if not global_ipfs_hash:
@@ -295,86 +244,24 @@ class DecentralizedNode:
 
             logger.info(f"Read global hash from blockchain: {global_ipfs_hash[:10]}...")
 
-            # 2. Recupera chiave di cifratura
-            Kc = self._get_encryption_key_for_manifest(global_ipfs_hash)
-
-            # 3. Scarica da IPFS con verifica
-            if Kc:
-                global_model_data = ipfs_client.download_model_secured(global_ipfs_hash, Kc)
-            else:
-                # Fallback: prova senza encryption
-                logger.warning("No encryption key, trying legacy download")
-                global_model_data = ipfs_client.download_model(global_ipfs_hash)
+            # 2. Scarica da IPFS
+            global_model_data = ipfs_client.download_model(global_ipfs_hash)
 
             if not global_model_data:
-                logger.error(f"Failed to download from IPFS")
+                logger.error(f" Failed to download from IPFS")
                 return False
 
-            # 4. Carica nel proprio modello locale
+            # 3. Carica nel proprio modello locale
             self.load_state_dict(global_model_data)
             logger.info(f"Node {self.node_id} loaded global model successfully")
 
             return True
 
         except Exception as e:
-            logger.error(f"Node {self.node_id} download failed: {e}")
+            logger.error(f" Node {self.node_id} download failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
-        
-    def _get_encryption_key_for_manifest(self, cid_manifest: str) -> Optional[str]:
-        """
-        Recupera la chiave di cifratura per un manifest CID
-        
-        NOTA PoC: In un sistema reale, questo userebbe un Key Release Service (KRS)
-        con proof of membership anonima. Per il PoC, usiamo storage locale.
-        
-        Args:
-            cid_manifest: CID del manifest da cui recuperare la chiave
-        
-        Returns:
-            Chiave Kc (base64url) o None se non disponibile
-        """
-        # Check in-memory storage
-        if hasattr(self, '_encryption_keys') and cid_manifest in self._encryption_keys:
-            return self._encryption_keys[cid_manifest]
-        
-        # WORKAROUND PoC: In assenza di KRS, l'aggregatore ha accesso a tutte le chiavi
-        # In produzione, implementare challenge-response con KRS
-        logger.debug(f"No local key found for {cid_manifest}")
-        return None
-    
-    def store_encryption_key(self, cid_manifest: str, Kc: str):
-        """
-        Store encryption key for a manifest
-        
-        Args:
-            cid_manifest: Manifest CID
-            Kc: Encryption key (base64url encoded)
-        """
-        if not hasattr(self, '_encryption_keys'):
-            self._encryption_keys = {}
-        
-        self._encryption_keys[cid_manifest] = Kc
-        logger.debug(f"Stored encryption key for {cid_manifest}")
-        
-    def share_encryption_key_with(self, other_node: 'DecentralizedNode', cid_manifest: str):
-        """
-        Share encryption key with another node (PoC simplification)
-        
-        In produzione, questo sarebbe gestito da un KRS con:
-        - Challenge-response protocol
-        - Proof of group membership
-        - Key wrapping con HPKE
-        
-        Args:
-            other_node: Node to share key with
-            cid_manifest: Manifest CID whose key to share
-        """
-        if hasattr(self, '_encryption_keys') and cid_manifest in self._encryption_keys:
-            Kc = self._encryption_keys[cid_manifest]
-            other_node.store_encryption_key(cid_manifest, Kc)
-            logger.debug(f"Shared key for {cid_manifest} with Node {other_node.node_id}")
     
     def _calculate_compute_power(self) -> int:
         """Calculate node's computational capacity"""

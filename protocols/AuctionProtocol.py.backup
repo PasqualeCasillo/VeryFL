@@ -10,9 +10,6 @@ from node.DecentralizedNode import DecentralizedNode
 from server.aggregation_alg.krum import krumAggregator
 from server.aggregation_alg.median import medianAggregator
 
-import os
-from chainfl.crypto_bbs import bbs_generate_keypair
-
 logger = logging.getLogger(__name__)
 
 class AuctionProtocol:
@@ -32,24 +29,10 @@ class AuctionProtocol:
         else:
             self.aggregator = None  # FedAvg default
         
-        # NUOVO: Gestione chiavi gruppo BBS+
-        self.group_public_keys = []
-        self.node_keypairs = {}  # {node_id: (public_key, secret_key)}
-        
     async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[dict]:
         """Execute a complete auction-based FL round"""
         try:
-            logger.info(f"Round {round_num + 1}")
-            if round_num == 0:
-                self.setup_group_keys(nodes)
-                
-                # Configure IPFS client with group keys
-                from chainfl.ipfs_client import IPFSClient
-                ipfs_client = IPFSClient()
-                ipfs_client.set_group_keys(self.group_public_keys)
-                ipfs_client.enable_encryption(True)
-                logger.info("IPFS client configured with group keys and encryption enabled")
-            
+            logger.info(f"Round {round_num + 1}")            
             # Phase 1: Deploy auction contract
             auction_address = await self._deploy_auction_contract(round_num, nodes)
             if not auction_address:
@@ -200,8 +183,6 @@ class AuctionProtocol:
         import traceback
 
         ipfs_client = IPFSClient()
-        ipfs_client.set_group_keys(self.group_public_keys)
-        ipfs_client.enable_encryption(True)
 
         # 1. Assign roles
         aggregator_node = None
@@ -223,8 +204,8 @@ class AuctionProtocol:
         logger.info("Starting parallel training for all nodes...")
         await self._train_all_nodes(nodes)
 
-        # 3. Participants upload to IPFS with encryption
-        logger.info("Participants uploading encrypted models to IPFS...")
+        # 3. Participants upload to IPFS
+        logger.info("Participants uploading models to IPFS...")
         upload_tasks = []
         for node in nodes:
             if node.role == "participant":
@@ -239,18 +220,7 @@ class AuctionProtocol:
         successful_uploads = sum(results)
         logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded successfully")
 
-        # 4. KEY SHARING PHASE - Participants share keys with aggregator
-        logger.info("Key sharing phase: distributing encryption keys to aggregator...")
-        for node in nodes:
-            if node.role == "participant" and hasattr(node, '_encryption_keys'):
-                # Share all keys with aggregator
-                for cid_manifest, Kc in node._encryption_keys.items():
-                    aggregator_node.store_encryption_key(cid_manifest, Kc)
-                logger.debug(f"Node {node.node_id} shared {len(node._encryption_keys)} keys with aggregator")
-        
-        logger.info("Key sharing complete")
-
-        # 5. Verify upload completeness
+        # 4. Verify upload completeness
         all_uploaded, missing_nodes = self.blockchain.verify_all_models_uploaded(
             self.current_auction_address
         )
@@ -259,9 +229,11 @@ class AuctionProtocol:
             logger.error(f"Upload verification failed: {len(missing_nodes)} nodes missing")
             logger.error(f"Missing node addresses: {missing_nodes}")
 
+            # Check if aggregation method can proceed with reduced nodes
             remaining_nodes = len(nodes) - len(missing_nodes)
 
             if self.aggregation_method == 'krum':
+                # Calculate if Krum constraint still satisfied
                 f = int(remaining_nodes * self.attack_config.byzantine_ratio)
                 required = 2 * f + 3
 
@@ -287,13 +259,15 @@ class AuctionProtocol:
                         f"Continuing with reduced node set "
                         f"({remaining_nodes} nodes available, threshold: {required})"
                     )
+                    logger.warning("Note: This reduces safety margin against Byzantine attacks")
             else:
+                # For non-Krum methods, abort on any missing uploads
                 logger.error("Aborting round due to incomplete uploads")
                 return None
 
         logger.info("Upload verification passed: all required models available")
 
-        # 6. Aggregator downloads, aggregates and uploads to IPFS
+        # 5. Aggregator downloads, aggregates and uploads to IPFS
         logger.info("=" * 60)
         logger.info("STARTING AGGREGATION PHASE")
         logger.info("=" * 60)
@@ -315,6 +289,7 @@ class AuctionProtocol:
             logger.info("Aggregation completed successfully")
 
         except ValueError as e:
+            # Krum constraint violation or validation error
             logger.error("=" * 60)
             logger.error("AGGREGATION FAILED: CONSTRAINT VIOLATION")
             logger.error("=" * 60)
@@ -334,7 +309,7 @@ class AuctionProtocol:
             logger.error("=" * 60)
             return None
 
-        # 7. Upload global model to IPFS with encryption
+        # 6. Upload global model to IPFS
         logger.info("Uploading global aggregated model to IPFS...")
         global_ipfs_hash = await aggregator_node.upload_global_model_to_ipfs(
             ipfs_client,
@@ -347,96 +322,34 @@ class AuctionProtocol:
             return None
 
         logger.info(f"Global model uploaded to IPFS: {global_ipfs_hash}")
+        
+        if hasattr(self, 'metrics_calculator') and self.attack_config:
+            if self.attack_config.is_active(round_num):
+                logger.info("=" * 60)
+                logger.info("PRE-DISTRIBUTION METRICS (before global model download)")
+                logger.info("=" * 60)
 
-        # 8. KEY SHARING PHASE - Aggregator shares global model key with all nodes
-        logger.info("Distributing global model encryption key to all nodes...")
-        if hasattr(aggregator_node, '_encryption_keys') and global_ipfs_hash in aggregator_node._encryption_keys:
-            global_Kc = aggregator_node._encryption_keys[global_ipfs_hash]
-            
-            for node in nodes:
-                if node.node_id != aggregator_node.node_id:
-                    node.store_encryption_key(global_ipfs_hash, global_Kc)
-            
-            logger.info("Global model key distributed to all nodes")
-        else:
-            logger.warning("No encryption key found for global model")
+                for node in nodes:
+                    # Valuta sul modello locale corrente (pre-distribuzione)
+                    acc = self._quick_accuracy(node.model, node.dataloader)
+                    marker = "BYZANTINE" if node.is_byzantine else "HONEST"
+                    logger.info(f"  Node {node.node_id} [{marker}]: accuracy={acc:.3f}")
 
-        # 9. Decentralized distribution via IPFS
+                logger.info("=" * 60)
+
+        # 7. Decentralized distribution via IPFS
         logger.info("Initiating decentralized model distribution...")
         distribution_success = await self._distribute_via_ipfs(nodes, ipfs_client)
 
         if not distribution_success:
             logger.warning("Some nodes failed to download global model")
+            # Continue anyway - not critical for round completion
 
         logger.info("=" * 60)
         logger.info("FL ROUND COMPLETED SUCCESSFULLY")
         logger.info("=" * 60)
 
         return aggregated_model
-    
-    async def _upload_node_model_secured(self, node: DecentralizedNode, ipfs_client, 
-                                         blockchain_proxy, auction_address) -> bool:
-        """
-        Upload node model with encryption and group signature
-        
-        Args:
-            node: DecentralizedNode instance
-            ipfs_client: IPFSClient with encryption enabled
-            blockchain_proxy: Blockchain proxy for registration
-            auction_address: Current auction contract address
-        
-        Returns:
-            True if upload successful, False otherwise
-        """
-        try:
-            logger.info(f"Node {node.node_id} uploading encrypted model...")
-            
-            # Get model data
-            model_state_dict = node.get_model_state_dict()
-            metadata = {
-                'node_id': node.node_id,
-                'round': node.current_round,
-                'role': node.role
-            }
-            
-            # Upload with encryption and signature
-            cid_manifest, key_data = ipfs_client.upload_model_secured(
-                model_state_dict,
-                metadata,
-                node.bbs_secret_key
-            )
-            
-            if not cid_manifest or not key_data:
-                logger.error(f"Node {node.node_id} failed IPFS upload")
-                return False
-            
-            logger.info(f"Node {node.node_id} uploaded to IPFS: {cid_manifest}")
-            
-            # Register hash on blockchain
-            import brownie
-            node_index = int(node.node_id)
-            node_account = brownie.accounts[node_index]
-            
-            contracts = brownie.project.chainServer
-            auction_contract = contracts.AggregatorAuction.at(auction_address)
-            
-            tx = auction_contract.submitModelHash(cid_manifest, {'from': node_account})
-            tx.wait(1)
-            
-            logger.info(f"Node {node.node_id} registered hash on blockchain")
-            
-            # Store encryption key for this node (in-memory for PoC)
-            if not hasattr(node, '_encryption_keys'):
-                node._encryption_keys = {}
-            node._encryption_keys[cid_manifest] = key_data['Kc']
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Node {node.node_id} upload failed: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
 
     #    NUOVA FUNZIONE: Distribuzione decentralizzata
     async def _distribute_via_ipfs(self, nodes: List[DecentralizedNode], ipfs_client):
@@ -626,39 +539,6 @@ class AuctionProtocol:
     #         logger.error(f"Error distributing global model: {e}")
     #         return False
         
-    def setup_group_keys(self, nodes: List[DecentralizedNode]):
-        """
-        Generate and distribute BBS+ group signature keys to nodes
-        
-        Args:
-            nodes: List of DecentralizedNode instances
-        """
-        logger.info("=" * 60)
-        logger.info("SETTING UP BBS+ GROUP SIGNATURE KEYS")
-        logger.info("=" * 60)
-        
-        self.group_public_keys = []
-        self.node_keypairs = {}
-        
-        for node in nodes:
-            # Generate keypair for this node
-            seed = os.urandom(32)
-            public_key, secret_key = bbs_generate_keypair(seed)
-            
-            # Store keypair
-            self.node_keypairs[node.node_id] = (public_key, secret_key)
-            self.group_public_keys.append(public_key)
-            
-            # Assign secret key to node
-            node.bbs_secret_key = secret_key
-            
-            logger.info(f"Generated BBS+ keypair for Node {node.node_id}")
-        
-        logger.info(f"Total group members: {len(self.group_public_keys)}")
-        logger.info("=" * 60)
-        
-        return self.group_public_keys
-    
     def _calculate_aggregate_loss(self, nodes):
         """Calculate average loss from all nodes' training results"""
         total_loss = 0.0

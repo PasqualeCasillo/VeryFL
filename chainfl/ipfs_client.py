@@ -97,95 +97,86 @@ class IPFSClient:
         node_secret_key: Optional[bytes] = None
     ) -> Tuple[Optional[str], Optional[Dict]]:
         """
-        Upload model with encryption and group signature
-        
-        Args:
-            model_state_dict: PyTorch model state_dict
-            metadata: Additional metadata (node_id, round, etc.)
-            node_secret_key: BBS+ secret key for signing (required if encryption enabled)
-        
-        Returns:
-            (cid_manifest, key_data) tuple where:
-                - cid_manifest: IPFS CID of signed manifest
-                - key_data: dict containing encryption key and CIDs
+        Upload con manifest STRUTTURATO + firma BBS+
         """
         if self.client is None:
             logger.error("IPFS client not connected")
             return None, None
-        
+
         if self.encryption_enabled and node_secret_key is None:
             raise ValueError("node_secret_key required when encryption is enabled")
-        
+
         try:
-            # Step 1: Serialize model
+            # 1. Serialize model
             model_data = {
                 'state_dict': model_state_dict,
                 'metadata': metadata or {}
             }
             model_bytes = pickle.dumps(model_data)
             logger.debug(f"Serialized model: {len(model_bytes)} bytes")
-            
+
             if self.encryption_enabled:
-                # Step 2: Generate symmetric key
+                # 2. Generate Kc
                 Kc = os.urandom(32)
                 logger.debug("Generated 256-bit encryption key")
-                
-                # Step 3: Encrypt model
+
+                # 3. Encrypt
                 encrypted_data = aesgcm_encrypt(Kc, model_bytes, aad=None)
-                logger.debug(f"Encrypted model: nonce={encrypted_data['nonce'][:16]}...")
-                
-                # Step 4: Upload ciphertext to IPFS
+                logger.debug(f"Encrypted model")
+
+                # 4. Upload ciphertext
                 ciphertext_json = json.dumps(encrypted_data, separators=(',', ':')).encode()
                 cid_cipher = self.client.add_bytes(ciphertext_json)
-                logger.info(f"Ciphertext uploaded to IPFS: {cid_cipher}")
-                
-                # Step 5: Create manifest
+                logger.info(f" Ciphertext uploaded: {cid_cipher}")
+
+                # 5. Create STRUCTURED manifest (conforme al documento)
                 manifest = {
                     'model_type': 'FL_weights_encrypted',
                     'version': '1.0',
                     'cipher_algo': 'AES-256-GCM',
                     'ciphertext_cid': cid_cipher,
                     'metadata': metadata or {},
-                    'timestamp': int(time.time())
+                    'timestamp': int(time.time()),
+                    'training_hash': sha256(model_bytes).hex()[:16]  # Checksum opzionale
                 }
-                
-                # Step 6: Sign manifest with BBS+ group signature
+
+                # 6. Sign manifest with BBS+
                 manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()
                 manifest_hash = sha256(manifest_bytes)
-                
+
                 signature = bbs_sign_messages([manifest_hash], node_secret_key)
                 manifest['group_signature'] = b64e(signature)
-                logger.debug("Manifest signed with BBS+ group signature")
-                
-                # Step 7: Upload signed manifest
+
+                logger.info(f" Manifest signed with BBS+ group signature")
+
+                # 7. Upload manifest
                 manifest_final = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()
                 cid_manifest = self.client.add_bytes(manifest_final)
-                logger.info(f"Signed manifest uploaded to IPFS: {cid_manifest}")
-                
-                # Step 8: Return key data
+
+                logger.info(f" Signed manifest: {cid_manifest}")
+
+                # 8. Return key data
                 key_data = {
                     'cid_manifest': cid_manifest,
                     'cid_cipher': cid_cipher,
                     'Kc': b64e(Kc),
-                    'encrypted': True
+                    'encrypted': True,
+                    'signature': b64e(signature)
                 }
-                
+
                 return cid_manifest, key_data
-            
+
             else:
-                # Non-encrypted upload (fallback)
+                # Fallback non-encrypted
                 ipfs_hash = self.client.add_bytes(model_bytes)
-                logger.info(f"Model uploaded to IPFS (no encryption): {ipfs_hash}")
-                
                 key_data = {
                     'cid_manifest': ipfs_hash,
                     'encrypted': False
                 }
-                
                 return ipfs_hash, key_data
-                
+
         except Exception as e:
-            logger.error(f"Failed to upload secured model: {e}")
+            logger.error(f"Upload failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None, None

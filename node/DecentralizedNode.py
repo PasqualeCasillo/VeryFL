@@ -584,3 +584,135 @@ class DecentralizedNode:
         
         logger.info(f"Aggregated {len(aggregated_state)} parameters")
         return aggregated_state
+    
+    def request_key_from_krs(
+        self, 
+        krs,  # KeyReleaseService instance
+        cid_manifest: str
+    ) -> Optional[str]:
+        """
+        Richiedi chiave da KRS usando BBS+ signature.
+
+        Returns:
+            Kc (base64) or None
+        """
+        import os
+        from chainfl.crypto_bbs import sha256, bbs_sign_messages
+
+        try:
+            # 1. Generate nonce
+            nonce = os.urandom(16).hex()
+
+            # 2. Create message to sign
+            message = sha256(f"{cid_manifest}||{nonce}".encode())
+
+            # 3. Sign with BBS+ to prove membership
+            signature = bbs_sign_messages([message], self.bbs_secret_key)
+
+            # 4. Request key from KRS
+            Kc = krs.request_key(cid_manifest, nonce, signature)
+
+            if Kc:
+                logger.info(f" Node {self.node_id}: Received key from KRS")
+                return Kc
+            else:
+                logger.error(f" Node {self.node_id}: KRS denied request")
+                return None
+
+        except Exception as e:
+            logger.error(f"Node {self.node_id}: KRS request failed: {e}")
+            return None
+        
+    async def aggregate_from_ipfs_with_krs(
+        self, 
+        ipfs_client, 
+        blockchain_proxy, 
+        auction_address, 
+        krs,  # NUOVO: KeyReleaseService
+        aggregation_method='fedavg'
+    ):
+        """
+        Aggregatore scarica modelli da IPFS richiedendo chiavi da KRS.
+        """
+        logger.info(f"Node {self.node_id} (AGGREGATOR) aggregating with KRS")
+        logger.info(f"Aggregation method: {aggregation_method.upper()}")
+        
+        try:
+            # 1. Get hashes from blockchain
+            import brownie
+            contracts = brownie.project.chainServer
+            auction_contract = contracts.AggregatorAuction.at(auction_address)
+            
+            ipfs_hashes = auction_contract.getAllModelHashes()
+            logger.info(f"Found {len(ipfs_hashes)} model hashes on blockchain")
+            
+            # 2. Download models using KRS for keys
+            downloaded_models = []
+            
+            for idx, ipfs_hash in enumerate(ipfs_hashes):
+                if not ipfs_hash:
+                    continue
+                
+                node_index = int(self.node_id)
+                if idx == node_index:
+                    # Use own model
+                    downloaded_models.append(self.get_model_state_dict())
+                    logger.info(f"Using own model")
+                else:
+                    # NUOVO: Request key from KRS
+                    logger.info(f"Requesting key from KRS for model {idx}")
+                    
+                    Kc = self.request_key_from_krs(krs, ipfs_hash)
+                    
+                    if not Kc:
+                        logger.warning(f"Failed to get key for model {idx}")
+                        continue
+                    
+                    # Download with key
+                    try:
+                        model_data = ipfs_client.download_model_secured(ipfs_hash, Kc)
+                        
+                        if model_data:
+                            downloaded_models.append(model_data)
+                            logger.info(f"✓ Downloaded and decrypted model {idx}")
+                        else:
+                            logger.warning(f"Failed to download model {idx}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error downloading model {idx}: {e}")
+                        continue
+                    
+            logger.info(f"Downloaded {len(downloaded_models)} models")
+            
+            # 3. Aggregate (existing code)
+            if aggregation_method.lower() == 'krum':
+                logger.info("Using KRUM aggregation")
+                from server.aggregation_alg.krum import krumAggregator
+                aggregator = krumAggregator(byzantine_ratio=0.3)
+                aggregated_state = aggregator._aggregate_alg(downloaded_models)
+                
+            elif aggregation_method.lower() == 'median':
+                logger.info("Using MEDIAN aggregation")
+                from server.aggregation_alg.median import medianAggregator
+                aggregator = medianAggregator()
+                aggregated_state = aggregator._aggregate_alg(downloaded_models)
+                
+            else:
+                logger.info("Using FEDAVG aggregation")
+                aggregated_state = {}
+                num_models = len(downloaded_models)
+                
+                for key in downloaded_models[0].keys():
+                    aggregated_state[key] = sum(
+                        model[key] for model in downloaded_models
+                    ) / num_models
+            
+            logger.info(f"✓ Aggregation complete")
+            
+            return aggregated_state
+            
+        except Exception as e:
+            logger.error(f"Aggregation failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None

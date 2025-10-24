@@ -2,6 +2,8 @@
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional
+from chainfl.krs import KeyReleaseService
+from chainfl.revocation import VLRManager
 
 from networkx import nodes
 import torch
@@ -23,6 +25,7 @@ class AuctionProtocol:
         self.current_auction_address = None
         self.aggregation_method = aggregation_method
         self.attack_config = attack_config
+        # NUOVO: KRS e VLR
         
         # Inizializza aggregatore
         if aggregation_method == 'krum':
@@ -36,19 +39,35 @@ class AuctionProtocol:
         self.group_public_keys = []
         self.node_keypairs = {}  # {node_id: (public_key, secret_key)}
         
+        self.krs = None
+        self.vlr_manager = VLRManager()
+        
     async def execute_round(self, round_num: int, nodes: List[DecentralizedNode]) -> Optional[dict]:
         """Execute a complete auction-based FL round"""
         try:
             logger.info(f"Round {round_num + 1}")
+            active_nodes = [
+                node for node in nodes 
+                if not self.vlr_manager.is_revoked(node.node_id)
+            ]
+            
+            revoked_count = len(nodes) - len(active_nodes)
+            if revoked_count > 0:
+                logger.warning(f"  {revoked_count} nodes excluded (revoked)")
+                logger.warning(f"Revoked nodes: {self.vlr_manager.get_revoked()}")
             if round_num == 0:
-                self.setup_group_keys(nodes)
-                
-                # Configure IPFS client with group keys
+                self.setup_group_keys(active_nodes)
+            
                 from chainfl.ipfs_client import IPFSClient
                 ipfs_client = IPFSClient()
                 ipfs_client.set_group_keys(self.group_public_keys)
                 ipfs_client.enable_encryption(True)
-                logger.info("IPFS client configured with group keys and encryption enabled")
+                logger.info("IPFS client configured with encryption")
+        
+            # VERIFICA: KRS deve essere inizializzato
+            if self.krs is None:
+                logger.error("CRITICAL: KRS not initialized!")
+                return None
             
             # Phase 1: Deploy auction contract
             auction_address = await self._deploy_auction_contract(round_num, nodes)
@@ -240,15 +259,24 @@ class AuctionProtocol:
         logger.info(f"{successful_uploads}/{len(upload_tasks)} participants uploaded successfully")
 
         # 4. KEY SHARING PHASE - Participants share keys with aggregator
-        logger.info("Key sharing phase: distributing encryption keys to aggregator...")
+        logger.info("=" * 60)
+        logger.info("KEY DISTRIBUTION PHASE - Registering keys in KRS")
+        logger.info("=" * 60)
+
+        if self.krs is None:
+            logger.error("CRITICAL: KRS not initialized! Cannot register keys.")
+            return None
+
+        registered_count = 0
         for node in nodes:
             if node.role == "participant" and hasattr(node, '_encryption_keys'):
-                # Share all keys with aggregator
-                for cid_manifest, Kc in node._encryption_keys.items():
-                    aggregator_node.store_encryption_key(cid_manifest, Kc)
-                logger.debug(f"Node {node.node_id} shared {len(node._encryption_keys)} keys with aggregator")
-        
-        logger.info("Key sharing complete")
+                for cid_manifest, Kc_b64 in node._encryption_keys.items():
+                    self.krs.register_key(cid_manifest, Kc_b64)
+                    registered_count += 1
+                    logger.debug(f"Registered key for node {node.node_id}")
+
+        logger.info(f" {registered_count} keys registered in KRS")
+        logger.info("=" * 60)
 
         # 5. Verify upload completeness
         all_uploaded, missing_nodes = self.blockchain.verify_all_models_uploaded(
@@ -295,16 +323,16 @@ class AuctionProtocol:
 
         # 6. Aggregator downloads, aggregates and uploads to IPFS
         logger.info("=" * 60)
-        logger.info("STARTING AGGREGATION PHASE")
-        logger.info("=" * 60)
+        logger.info("AGGREGATION PHASE - Aggregator requesting keys from KRS")
         logger.info(f"Aggregation method: {self.aggregation_method.upper()}")
         logger.info(f"Aggregator node: {aggregator_node.node_id}")
 
         try:
-            aggregated_model = await aggregator_node.aggregate_from_ipfs(
+            aggregated_model = await aggregator_node.aggregate_from_ipfs_with_krs(
                 ipfs_client,
                 self.blockchain,
                 self.current_auction_address,
+                self.krs,
                 aggregation_method=self.aggregation_method
             )
 
@@ -625,39 +653,68 @@ class AuctionProtocol:
     #     except Exception as e:
     #         logger.error(f"Error distributing global model: {e}")
     #         return False
-        
+    
     def setup_group_keys(self, nodes: List[DecentralizedNode]):
-        """
-        Generate and distribute BBS+ group signature keys to nodes
-        
-        Args:
-            nodes: List of DecentralizedNode instances
-        """
+        """Setup keys + initialize KRS"""
         logger.info("=" * 60)
-        logger.info("SETTING UP BBS+ GROUP SIGNATURE KEYS")
+        logger.info("SETTING UP BBS+ GROUP SIGNATURE KEYS + KRS")
         logger.info("=" * 60)
         
         self.group_public_keys = []
         self.node_keypairs = {}
         
         for node in nodes:
-            # Generate keypair for this node
             seed = os.urandom(32)
             public_key, secret_key = bbs_generate_keypair(seed)
             
-            # Store keypair
             self.node_keypairs[node.node_id] = (public_key, secret_key)
             self.group_public_keys.append(public_key)
             
-            # Assign secret key to node
             node.bbs_secret_key = secret_key
             
             logger.info(f"Generated BBS+ keypair for Node {node.node_id}")
         
+        # NUOVO: Initialize KRS
+        self.krs = KeyReleaseService(self.group_public_keys)
+        
         logger.info(f"Total group members: {len(self.group_public_keys)}")
+        logger.info("🔑 KRS initialized")
         logger.info("=" * 60)
         
         return self.group_public_keys
+        
+    # def setup_group_keys(self, nodes: List[DecentralizedNode]):
+    #     """
+    #     Generate and distribute BBS+ group signature keys to nodes
+        
+    #     Args:
+    #         nodes: List of DecentralizedNode instances
+    #     """
+    #     logger.info("=" * 60)
+    #     logger.info("SETTING UP BBS+ GROUP SIGNATURE KEYS")
+    #     logger.info("=" * 60)
+        
+    #     self.group_public_keys = []
+    #     self.node_keypairs = {}
+        
+    #     for node in nodes:
+    #         # Generate keypair for this node
+    #         seed = os.urandom(32)
+    #         public_key, secret_key = bbs_generate_keypair(seed)
+            
+    #         # Store keypair
+    #         self.node_keypairs[node.node_id] = (public_key, secret_key)
+    #         self.group_public_keys.append(public_key)
+            
+    #         # Assign secret key to node
+    #         node.bbs_secret_key = secret_key
+            
+    #         logger.info(f"Generated BBS+ keypair for Node {node.node_id}")
+        
+    #     logger.info(f"Total group members: {len(self.group_public_keys)}")
+    #     logger.info("=" * 60)
+        
+    #     return self.group_public_keys
     
     def _calculate_aggregate_loss(self, nodes):
         """Calculate average loss from all nodes' training results"""

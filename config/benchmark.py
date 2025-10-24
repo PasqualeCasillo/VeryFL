@@ -214,7 +214,7 @@ class DecentralizedPowerGridAttack(BenchMark):
             'alpha': 0.5,
             'mode': 'decentralized',
             'auction_timeout': 180,
-            'aggregation_method': 'krum',
+            'aggregation_method': 'fedavg',
             'input_dim': 128,
             
             # NUOVO: Configurazione attacco

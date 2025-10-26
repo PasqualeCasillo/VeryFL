@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import base64
 from torch.utils.data import DataLoader
+from chainfl import krs
 from client.base.baseTrainer import BaseTrainer
 from utils.attack_utils import create_flipped_dataloader
 from chainfl.ipfs_client import IPFSClient
@@ -280,11 +281,15 @@ class DecentralizedNode:
             logger.error(traceback.format_exc())
             return None
         
-    async def download_global_model_from_ipfs(self, ipfs_client, auction_address):
+    async def download_global_model_from_ipfs(self, ipfs_client, auction_address, krs):
         """
         Ogni nodo AUTONOMAMENTE scarica il modello globale da IPFS.
         Legge l'hash dalla blockchain e scarica da IPFS.
         VERSIONE CON DECRYPTION E VERIFICA
+        """
+        
+        """
+        MODIFICATO: Aggiunto parametro 'krs' per richiedere chiavi
         """
         try:
             logger.info(f"Node {self.node_id} downloading GLOBAL model from IPFS...")
@@ -293,7 +298,6 @@ class DecentralizedNode:
             import brownie
             contracts = brownie.project.chainServer
             auction_contract = contracts.AggregatorAuction.at(auction_address)
-
             global_ipfs_hash = auction_contract.getGlobalModelHash()
 
             if not global_ipfs_hash:
@@ -303,10 +307,18 @@ class DecentralizedNode:
             logger.info(f"Read global hash from blockchain: {global_ipfs_hash[:10]}...")
 
             # 2. Recupera chiave di cifratura
-            Kc = self._get_encryption_key_for_manifest(global_ipfs_hash)
+            # Kc = self._get_encryption_key_for_manifest(global_ipfs_hash)
+            logger.info(f"Node {self.node_id} requesting key from KRS...")
+            Kc = self.request_key_from_krs(krs, global_ipfs_hash)
 
+            if not Kc:
+                logger.error(f"Node {self.node_id} failed to obtain key from KRS")
+                # Fallback opzionale a memoria locale (per compatibilità)
+                Kc = self._get_encryption_key_for_manifest(global_ipfs_hash)
+                
             # 3. Scarica da IPFS con verifica
             if Kc:
+                logger.info(f"Node {self.node_id} decrypting with KRS-provided key...")
                 global_model_data = ipfs_client.download_model_secured(global_ipfs_hash, Kc)
             else:
                 # Fallback: prova senza encryption

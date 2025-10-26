@@ -376,16 +376,31 @@ class AuctionProtocol:
 
         logger.info(f"Global model uploaded to IPFS: {global_ipfs_hash}")
 
-        # 8. KEY SHARING PHASE - Aggregator shares global model key with all nodes
-        logger.info("Distributing global model encryption key to all nodes...")
+        # # 8. KEY SHARING PHASE - Aggregator shares global model key with all nodes
+        # logger.info("Distributing global model encryption key to all nodes...")
+        # if hasattr(aggregator_node, '_encryption_keys') and global_ipfs_hash in aggregator_node._encryption_keys:
+        #     global_Kc = aggregator_node._encryption_keys[global_ipfs_hash]
+            
+        #     for node in nodes:
+        #         if node.node_id != aggregator_node.node_id:
+        #             node.store_encryption_key(global_ipfs_hash, global_Kc)
+            
+        #     logger.info("Global model key distributed to all nodes")
+        # else:
+        #     logger.warning("No encryption key found for global model")
+        
+        # 8. KEY SHARING PHASE - Register key in KRS for secure distribution
+        logger.info("Registering global model key in KRS...")
         if hasattr(aggregator_node, '_encryption_keys') and global_ipfs_hash in aggregator_node._encryption_keys:
             global_Kc = aggregator_node._encryption_keys[global_ipfs_hash]
-            
-            for node in nodes:
-                if node.node_id != aggregator_node.node_id:
-                    node.store_encryption_key(global_ipfs_hash, global_Kc)
-            
-            logger.info("Global model key distributed to all nodes")
+
+            # OPZIONE 2: Registra nel KRS (Produzione)
+            self.krs.register_key(global_ipfs_hash, global_Kc)
+            logger.info(f" Global model key registered in KRS for CID {global_ipfs_hash[:10]}...")
+
+            # OPZIONE 2: Notifica ai nodi che possono richiedere la chiave
+            logger.info("Nodes will request key from KRS during download phase")
+
         else:
             logger.warning("No encryption key found for global model")
 
@@ -476,7 +491,11 @@ class AuctionProtocol:
         
         # Aspetta che tutti i nodi scarichino in PARALLELO
         download_tasks = [
-            node.download_global_model_from_ipfs(ipfs_client, self.current_auction_address)
+            node.download_global_model_from_ipfs(
+                ipfs_client, 
+                self.current_auction_address,
+                self.krs  # ← NUOVO: Passa riferimento KRS
+            )
             for node in nodes
         ]
         
@@ -484,7 +503,7 @@ class AuctionProtocol:
         successful = sum(results)
         
         logger.info(f" {successful}/{len(nodes)} nodes downloaded global model")
-        
+        logger.info(f" All key requests processed by KRS")
         return successful == len(nodes)
         
     async def _train_all_nodes(self, nodes: List[DecentralizedNode]) -> List[Dict]:

@@ -262,7 +262,7 @@ class DecentralizedPowerGridCrypto(BenchMark):
             'device': 'cpu',
             'lr': 1e-3,
             'weight_decay': 1e-4,
-            'num_steps': 2
+            'num_steps': 4
         }
         
         self.algorithm = FedAvg()

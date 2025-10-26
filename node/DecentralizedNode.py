@@ -5,11 +5,18 @@ from copy import deepcopy
 import random
 import torch
 import torch.nn as nn
+import base64
 from torch.utils.data import DataLoader
 from client.base.baseTrainer import BaseTrainer
 from utils.attack_utils import create_flipped_dataloader
 from chainfl.ipfs_client import IPFSClient
 from typing import List, Tuple, Dict, Optional
+from chainfl.crypto_bbs import (
+    bbs_sign_messages, 
+    sha256,
+    x25519_generate,  # ← NUOVO
+    hpke_open          # ← NUOVO
+)
 
 logger = logging.getLogger(__name__)
 
@@ -591,36 +598,48 @@ class DecentralizedNode:
         cid_manifest: str
     ) -> Optional[str]:
         """
-        Richiedi chiave da KRS usando BBS+ signature.
+        Richiedi chiave da KRS usando BBS+ signature + HPKE.
+        
+        AGGIORNATO: Ora usa HPKE key wrapping per sicurezza.
 
         Returns:
             Kc (base64) or None
         """
         import os
-        from chainfl.crypto_bbs import sha256, bbs_sign_messages
-
+        
         try:
-            # 1. Generate nonce
+            # 1. ← NUOVO: Genera coppia effimera X25519
+            sk_eph_b64, pk_eph_b64 = x25519_generate()
+            logger.debug(f" Node {self.node_id}: Generated ephemeral keypair")
+            
+            # 2. Generate nonce
             nonce = os.urandom(16).hex()
 
-            # 2. Create message to sign
-            message = sha256(f"{cid_manifest}||{nonce}".encode())
+            # 3. ← MODIFICATO: Create message to sign (include pk_eph)
+            message = sha256(f"{cid_manifest}||{nonce}||{pk_eph_b64}".encode())
 
-            # 3. Sign with BBS+ to prove membership
+            # 4. Sign with BBS+ to prove membership
             signature = bbs_sign_messages([message], self.bbs_secret_key)
 
-            # 4. Request key from KRS
-            Kc = krs.request_key(cid_manifest, nonce, signature)
+            # 5. ← MODIFICATO: Request key from KRS con pk_eph
+            wrapped = krs.request_key(cid_manifest, nonce, signature, pk_eph_b64)
 
-            if Kc:
-                logger.info(f" Node {self.node_id}: Received key from KRS")
-                return Kc
-            else:
+            if not wrapped:
                 logger.error(f" Node {self.node_id}: KRS denied request")
                 return None
+            
+            # 6. ← NUOVO: Decifra con HPKE
+            Kc_bytes = hpke_open(sk_eph_b64, wrapped, info=b"veryfl-krs-v1")
+            Kc_b64 = base64.urlsafe_b64encode(Kc_bytes).decode().rstrip("=")
+            
+            logger.info(f" Node {self.node_id}: Received and unwrapped key from KRS")
+
+            return Kc_b64
 
         except Exception as e:
-            logger.error(f"Node {self.node_id}: KRS request failed: {e}")
+            logger.error(f" Node {self.node_id}: KRS request failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
         
     async def aggregate_from_ipfs_with_krs(

@@ -201,7 +201,7 @@ def group_verify_any(pubkeys: List[bytes], messages: List[bytes], signature: byt
         except Exception:
             continue  # Try next key
     
-    logger.warning("❌ Group signature verification FAILED - not from any authorized member")
+    logger.warning("Group signature verification FAILED - not from any authorized member")
     return False
 
 

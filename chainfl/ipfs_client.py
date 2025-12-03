@@ -126,6 +126,7 @@ class IPFSClient:
 
                 # 4. Upload ciphertext
                 ciphertext_json = json.dumps(encrypted_data, separators=(',', ':')).encode()
+                # logger.info(f" ciphertext_json uploaded: {ciphertext_json}")
                 cid_cipher = self.client.add_bytes(ciphertext_json)
                 logger.info(f" Ciphertext uploaded: {cid_cipher}")
 
